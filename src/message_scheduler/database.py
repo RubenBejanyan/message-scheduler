@@ -39,6 +39,10 @@ async def run_migrations() -> None:
         "ALTER TABLE scheduled_tasks ADD COLUMN IF NOT EXISTS user_telegram_id BIGINT",
         # Auto-approve any users left pending from the previous approval-flow version
         "UPDATE registered_users SET is_approved = TRUE WHERE is_approved = FALSE",
+        "ALTER TABLE scheduled_tasks ADD COLUMN IF NOT EXISTS "
+        "send_as VARCHAR(10) NOT NULL DEFAULT 'bot'",
+        "ALTER TABLE registered_users ADD COLUMN IF NOT EXISTS "
+        "has_telethon_session BOOLEAN NOT NULL DEFAULT FALSE",
     ]
     async with engine.begin() as conn:
         for stmt in stmts:

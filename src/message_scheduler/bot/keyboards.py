@@ -50,6 +50,22 @@ def language_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def send_as_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🤖 From the bot", callback_data="send_as:bot")
+    builder.button(text="👤 From my account", callback_data="send_as:user")
+    builder.adjust(2)
+    return builder.as_markup()
+
+
+def connect_confirm_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ I understand, connect", callback_data="connect_confirm")
+    builder.button(text="❌ Cancel", callback_data="connect_cancel")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
 def block_keyboard(telegram_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="🚫 Block", callback_data=f"block_user:{telegram_id}")

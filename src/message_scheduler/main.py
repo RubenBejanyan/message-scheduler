@@ -18,8 +18,14 @@ from aiogram.types import BotCommand
 from .bot.handlers import router
 from .config import settings
 from .database import init_db, run_migrations
-from .scheduler import reload_jobs_from_db, scheduler
-from .telegram_client import start_client, stop_client
+from .scheduler import reload_jobs_from_db, scheduler, set_bot
+from .telegram_client import (
+    reconnect_user_clients,
+    start_client,
+    stop_all_user_clients,
+    stop_client,
+)
+from .users import set_session_status
 
 logging.basicConfig(
     level=logging.INFO,
@@ -51,7 +57,7 @@ async def main() -> None:
     await _init_db_with_retry()
     await run_migrations()
 
-    logger.info("Connecting Telethon user client…")
+    logger.info("Connecting Telethon owner client…")
     try:
         await start_client()
     except Exception as exc:
@@ -62,6 +68,12 @@ async def main() -> None:
         )
         return
 
+    logger.info("Reconnecting per-user Telethon sessions…")
+    expired_ids = await reconnect_user_clients()
+    for uid in expired_ids:
+        await set_session_status(uid, False)
+        logger.info("Marked user %d session as expired in DB", uid)
+
     logger.info("Starting APScheduler…")
     scheduler.start()
     await reload_jobs_from_db()
@@ -71,10 +83,13 @@ async def main() -> None:
         token=settings.telegram_bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
+    set_bot(bot)
     await bot.set_my_commands([
         BotCommand(command="schedule", description="Create a new scheduled message"),
         BotCommand(command="list", description="View your active schedules"),
         BotCommand(command="cancel", description="Cancel a schedule"),
+        BotCommand(command="connect", description="Link your Telegram account for sending"),
+        BotCommand(command="disconnect", description="Unlink your Telegram account"),
         BotCommand(command="help", description="Help & all commands"),
     ])
     dp = Dispatcher(storage=MemoryStorage())
@@ -84,7 +99,7 @@ async def main() -> None:
         while True:
             try:
                 await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
-                break  # clean stop (e.g. Ctrl-C propagated as StopIteration)
+                break
             except (ConnectionResetError, OSError) as exc:
                 logger.warning("Polling connection reset (%s) — reconnecting in 5s…", exc)
                 await asyncio.sleep(5)
@@ -92,6 +107,7 @@ async def main() -> None:
         logger.info("Shutting down…")
         scheduler.shutdown(wait=False)
         await stop_client()
+        await stop_all_user_clients()
         await bot.session.close()
 
 

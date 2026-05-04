@@ -15,6 +15,7 @@ class RegisteredUser(Base):
     username: Mapped[str | None] = mapped_column(String(100), nullable=True)
     first_name: Mapped[str] = mapped_column(String(100), nullable=False)
     is_approved: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    has_telethon_session: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -43,6 +44,11 @@ class ScheduledTask(Base):
 
     language: Mapped[str] = mapped_column(
         String(50), nullable=False, default="English", server_default="English"
+    )
+
+    # "bot" → send via bot account; "user" → send via owner's personal Telethon session
+    send_as: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="bot", server_default="bot"
     )
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

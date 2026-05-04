@@ -26,6 +26,14 @@ async def register_user(telegram_id: int, first_name: str, username: str | None)
         return user
 
 
+async def set_session_status(telegram_id: int, has_session: bool) -> None:
+    async with async_session_factory() as session:
+        user = await session.get(RegisteredUser, telegram_id)
+        if user is not None:
+            user.has_telethon_session = has_session
+            await session.commit()
+
+
 async def block_user(telegram_id: int) -> bool:
     async with async_session_factory() as session:
         user = await session.get(RegisteredUser, telegram_id)

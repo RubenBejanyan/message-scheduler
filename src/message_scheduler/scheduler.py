@@ -2,17 +2,28 @@ import logging
 import uuid
 from datetime import UTC, datetime
 
+from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select, update
 
 from .ai_generator import generate_message
 from .database import async_session_factory
 from .models import ScheduledTask
-from .telegram_client import get_recipient_info, send_message_as_user
+from .telegram_client import (
+    get_recipient_info,
+    send_message_as_user_session,
+)
 
 logger = logging.getLogger(__name__)
 
 scheduler = AsyncIOScheduler(timezone="UTC")
+
+_bot: Bot | None = None
+
+
+def set_bot(bot: Bot) -> None:
+    global _bot
+    _bot = bot
 
 
 async def _execute_job(task_id: int) -> None:
@@ -27,7 +38,12 @@ async def _execute_job(task_id: int) -> None:
         text = await generate_message(
             task.target_username, task.topic, task.language, recipient_info
         )
-        await send_message_as_user(task.target_username, text)
+        if task.send_as == "user":
+            await send_message_as_user_session(task.user_telegram_id, task.target_username, text)
+        else:
+            if _bot is None:
+                raise RuntimeError("Bot instance not set — call set_bot() on startup")
+            await _bot.send_message(chat_id=task.target_username, text=text)
 
         async with async_session_factory() as session:
             await session.execute(
@@ -112,6 +128,7 @@ async def create_task(
     interval_label: str,
     jitter_seconds: int | None = None,
     language: str = "English",
+    send_as: str = "bot",
 ) -> ScheduledTask:
     """Persist a new scheduled task and register it with APScheduler."""
     job_id = f"task_{uuid.uuid4().hex[:12]}"
@@ -125,6 +142,7 @@ async def create_task(
         interval_label=interval_label,
         jitter_seconds=jitter_seconds,
         language=language,
+        send_as=send_as,
         job_id=job_id,
         is_active=True,
     )

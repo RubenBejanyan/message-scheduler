@@ -1,0 +1,15 @@
+.venv/
+.git/
+.github/
+.claude/
+__pycache__/
+*.pyc
+*.pyo
+*.session
+*.session-journal
+.env
+.mypy_cache/
+.ruff_cache/
+PROGRESS.md
+OPENAI_SETUP.md
+TELEGRAM_SETUP.md

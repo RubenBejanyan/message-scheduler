@@ -2,25 +2,17 @@ import logging
 import uuid
 from datetime import UTC, datetime
 
-from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select, update
 
 from .ai_generator import generate_message
 from .database import async_session_factory
 from .models import ScheduledTask
-from .telegram_client import get_recipient_info
+from .telegram_client import get_recipient_info, send_message_as_user
 
 logger = logging.getLogger(__name__)
 
 scheduler = AsyncIOScheduler(timezone="UTC")
-
-_bot: Bot | None = None
-
-
-def set_bot(bot: Bot) -> None:
-    global _bot
-    _bot = bot
 
 
 async def _execute_job(task_id: int) -> None:
@@ -30,16 +22,12 @@ async def _execute_job(task_id: int) -> None:
         if task is None or not task.is_active:
             return
 
-    if _bot is None:
-        logger.error("Bot not initialised — cannot send message for job %s", task_id)
-        return
-
     try:
         recipient_info = await get_recipient_info(task.target_username)
         text = await generate_message(
             task.target_username, task.topic, task.language, recipient_info
         )
-        await _bot.send_message(chat_id=task.target_username, text=text)
+        await send_message_as_user(task.target_username, text)
 
         async with async_session_factory() as session:
             await session.execute(

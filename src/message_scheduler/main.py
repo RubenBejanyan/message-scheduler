@@ -16,7 +16,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 from .bot.handlers import router
 from .config import settings
-from .database import init_db
+from .database import init_db, run_migrations
 from .scheduler import reload_jobs_from_db, scheduler
 from .telegram_client import start_client, stop_client
 
@@ -48,6 +48,7 @@ async def main() -> None:
 
     logger.info("Initialising database…")
     await _init_db_with_retry()
+    await run_migrations()
 
     logger.info("Connecting Telethon user client…")
     try:

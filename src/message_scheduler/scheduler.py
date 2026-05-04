@@ -23,7 +23,7 @@ async def _execute_job(task_id: int) -> None:
             return
 
     try:
-        text = await generate_message(task.target_username, task.topic)
+        text = await generate_message(task.target_username, task.topic, task.language)
         await send_message_as_user(task.target_username, text)
 
         async with async_session_factory() as session:
@@ -41,11 +41,14 @@ async def _execute_job(task_id: int) -> None:
 
 def _add_apscheduler_job(task: ScheduledTask) -> None:
     """Register a task in APScheduler based on its interval type."""
+    jitter = task.jitter_seconds or 0
+
     if task.interval_type == "interval":
         scheduler.add_job(
             _execute_job,
             "interval",
             seconds=int(task.interval_value),
+            jitter=jitter,
             id=task.job_id,
             args=[task.id],
             replace_existing=True,
@@ -58,10 +61,27 @@ def _add_apscheduler_job(task: ScheduledTask) -> None:
             "cron",
             hour=int(hour),
             minute=int(minute),
+            jitter=jitter,
             id=task.job_id,
             args=[task.id],
             replace_existing=True,
             misfire_grace_time=60,
+        )
+    elif task.interval_type == "window":
+        start_str, end_str = task.interval_value.split("-")
+        s_h, s_m = map(int, start_str.split(":"))
+        e_h, e_m = map(int, end_str.split(":"))
+        window_secs = (e_h * 60 + e_m - s_h * 60 - s_m) * 60
+        scheduler.add_job(
+            _execute_job,
+            "cron",
+            hour=s_h,
+            minute=s_m,
+            jitter=max(0, window_secs),
+            id=task.job_id,
+            args=[task.id],
+            replace_existing=True,
+            misfire_grace_time=max(60, window_secs),
         )
 
 
@@ -75,7 +95,9 @@ async def reload_jobs_from_db() -> None:
 
     for task in tasks:
         _add_apscheduler_job(task)
-        logger.info("Restored job: %s → %s every %s", task.job_id, task.target_username, task.interval_label)  # noqa: E501
+        logger.info(  # noqa: E501
+            "Restored job: %s → %s every %s", task.job_id, task.target_username, task.interval_label
+        )
 
 
 async def create_task(
@@ -84,6 +106,8 @@ async def create_task(
     interval_type: str,
     interval_value: str,
     interval_label: str,
+    jitter_seconds: int | None = None,
+    language: str = "English",
 ) -> ScheduledTask:
     """Persist a new scheduled task and register it with APScheduler."""
     job_id = f"task_{uuid.uuid4().hex[:12]}"
@@ -94,6 +118,8 @@ async def create_task(
         interval_type=interval_type,
         interval_value=interval_value,
         interval_label=interval_label,
+        jitter_seconds=jitter_seconds,
+        language=language,
         job_id=job_id,
         is_active=True,
     )
@@ -139,12 +165,29 @@ def parse_interval(text: str) -> tuple[str, str, str] | None:
     Returns None if input is invalid.
 
     Accepted formats:
-        30m        → every 30 minutes
-        2h         → every 2 hours
-        1d         → every 1 day
-        daily 09:00 → every day at 09:00 UTC
+        30m              → every 30 minutes
+        2h               → every 2 hours
+        1d               → every 1 day
+        daily 09:00      → every day at 09:00 UTC
+        window 15:15-15:50 → daily at random time between 15:15 and 15:50 UTC
     """
     text = text.strip().lower()
+
+    if text.startswith("window "):
+        window_part = text[7:].strip()
+        try:
+            start_str, end_str = window_part.split("-")
+            s_h, s_m = map(int, start_str.strip().split(":"))
+            e_h, e_m = map(int, end_str.strip().split(":"))
+            if not (0 <= s_h <= 23 and 0 <= s_m <= 59 and 0 <= e_h <= 23 and 0 <= e_m <= 59):
+                return None
+            if e_h * 60 + e_m <= s_h * 60 + s_m:
+                return None
+            value = f"{s_h:02d}:{s_m:02d}-{e_h:02d}:{e_m:02d}"
+            label = f"daily between {s_h:02d}:{s_m:02d} and {e_h:02d}:{e_m:02d} UTC"
+            return ("window", value, label)
+        except ValueError:
+            return None
 
     if text.startswith("daily "):
         time_part = text[6:].strip()

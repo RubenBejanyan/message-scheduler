@@ -15,12 +15,20 @@ class ScheduledTask(Base):
     target_username: Mapped[str] = mapped_column(String(100), nullable=False)
     topic: Mapped[str] = mapped_column(Text, nullable=False)
 
-    # "interval" → fires every N seconds; "cron" → fires on a cron expression
+    # "interval" → fires every N seconds; "cron" → fires daily at HH:MM;
+    # "window" → fires daily at random time between HH:MM and HH:MM
     interval_type: Mapped[str] = mapped_column(String(20), nullable=False)
-    # For interval: number of seconds as string. For cron: "HH:MM" (daily at time).
+    # interval: seconds as string | cron: "HH:MM" | window: "HH:MM-HH:MM"
     interval_value: Mapped[str] = mapped_column(String(50), nullable=False)
-    # Human-readable description stored for display
-    interval_label: Mapped[str] = mapped_column(String(100), nullable=False)
+    interval_label: Mapped[str] = mapped_column(String(150), nullable=False)
+
+    # Extra random delay added on top of scheduled time (0–jitter_seconds).
+    # None / 0 means no jitter. Not used for window type (window IS the randomization).
+    jitter_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
+
+    language: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="English", server_default="English"
+    )
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     job_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)

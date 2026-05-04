@@ -7,19 +7,29 @@ from aiogram.types import CallbackQuery, Message
 
 from ..config import settings
 from ..scheduler import cancel_task, create_task, list_active_tasks, parse_interval
-from .keyboards import cancel_task_keyboard, confirm_keyboard
+from .keyboards import (
+    cancel_task_keyboard,
+    confirm_keyboard,
+    language_keyboard,
+    randomization_keyboard,
+)
 from .states import ScheduleForm
 
 logger = logging.getLogger(__name__)
 router = Router()
 
+_JITTER_LABELS: dict[int, str] = {
+    900: "±15 min",
+    3600: "±1 hour",
+    7200: "±2 hours",
+}
+
 
 def _owner_only(message: Message) -> bool:
-    """Return True if message comes from the configured owner."""
     return message.from_user is not None and message.from_user.id == settings.telegram_owner_id
 
 
-# ── Guards ────────────────────────────────────────────────────────────────────
+# ── /start  /help ─────────────────────────────────────────────────────────────
 
 
 @router.message(Command("start"))
@@ -55,7 +65,7 @@ async def cmd_schedule(message: Message, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(ScheduleForm.waiting_for_target)
     await message.answer(
-        "Step 1/3 — <b>Who should receive the messages?</b>\n\n"
+        "Step 1 — <b>Who should receive the messages?</b>\n\n"
         "Enter the Telegram username (e.g. <code>@john_doe</code>):",
         parse_mode="HTML",
     )
@@ -73,12 +83,13 @@ async def process_target(message: Message, state: FSMContext) -> None:
     await state.update_data(target=text)
     await state.set_state(ScheduleForm.waiting_for_interval)
     await message.answer(
-        "Step 2/3 — <b>How often should I send?</b>\n\n"
+        "Step 2 — <b>How often / when should I send?</b>\n\n"
         "Examples:\n"
         "• <code>30m</code> — every 30 minutes\n"
         "• <code>2h</code> — every 2 hours\n"
         "• <code>1d</code> — every day\n"
-        "• <code>daily 09:00</code> — every day at 09:00 UTC",
+        "• <code>daily 09:00</code> — every day at 09:00 UTC\n"
+        "• <code>window 15:15-15:50</code> — daily at a random time between 15:15 and 15:50 UTC",
         parse_mode="HTML",
     )
 
@@ -92,13 +103,14 @@ async def process_interval(message: Message, state: FSMContext) -> None:
 
     if parsed is None:
         await message.answer(
-            "Could not parse that interval. Try formats like: 30m, 2h, 1d, daily 09:00"
+            "Could not parse that. Try: <code>30m</code>, <code>2h</code>, "
+            "<code>daily 09:00</code>, or <code>window 15:00-15:45</code>",
+            parse_mode="HTML",
         )
         return
 
     interval_type, interval_value, interval_label = parsed
 
-    # Enforce minimum interval
     if interval_type == "interval":
         min_seconds = settings.min_interval_minutes * 60
         if int(interval_value) < min_seconds:
@@ -112,13 +124,57 @@ async def process_interval(message: Message, state: FSMContext) -> None:
         interval_value=interval_value,
         interval_label=interval_label,
     )
-    await state.set_state(ScheduleForm.waiting_for_topic)
-    await message.answer(
-        "Step 3/3 — <b>What should the message be about?</b>\n\n"
-        "Describe the topic or context (e.g. <i>good morning motivation</i>, "
-        "<i>remind her to drink water</i>, <i>funny cat fact</i>):",
+
+    if interval_type == "window":
+        # Window already encodes randomization — skip that step
+        await state.update_data(jitter_seconds=None)
+        await state.set_state(ScheduleForm.waiting_for_language)
+        await message.answer(
+            "Step 3 — <b>Language?</b>\n\nChoose the language for the generated messages:",
+            reply_markup=language_keyboard(),
+            parse_mode="HTML",
+        )
+    else:
+        await state.set_state(ScheduleForm.waiting_for_randomization)
+        await message.answer(
+            "Step 3 — <b>Randomization</b>\n\n"
+            "Should I add a random delay so messages don't always arrive at the exact same time?",
+            reply_markup=randomization_keyboard(),
+            parse_mode="HTML",
+        )
+
+
+@router.callback_query(F.data.startswith("jitter:"), ScheduleForm.waiting_for_randomization)
+async def process_randomization(callback: CallbackQuery, state: FSMContext) -> None:
+    raw = int(callback.data.split(":")[1])  # type: ignore[union-attr]
+    jitter = raw if raw > 0 else None
+    await state.update_data(jitter_seconds=jitter)
+    await callback.message.edit_reply_markup()  # type: ignore[union-attr]
+    await state.set_state(ScheduleForm.waiting_for_language)
+    await callback.message.answer(  # type: ignore[union-attr]
+        "Step 4 — <b>Language?</b>\n\nChoose the language for the generated messages:",
+        reply_markup=language_keyboard(),
         parse_mode="HTML",
     )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("lang:"), ScheduleForm.waiting_for_language)
+async def process_language(callback: CallbackQuery, state: FSMContext) -> None:
+    language = callback.data.split(":")[1]  # type: ignore[union-attr]
+    await state.update_data(language=language)
+    await callback.message.edit_reply_markup()  # type: ignore[union-attr]
+
+    data = await state.get_data()
+    step = "5" if data.get("interval_type") != "window" else "4"
+    await state.set_state(ScheduleForm.waiting_for_topic)
+    await callback.message.answer(  # type: ignore[union-attr]
+        f"Step {step} — <b>What should the messages be about?</b>\n\n"
+        "Describe the topic or context (e.g. <i>good morning motivation</i>, "
+        "<i>remind her to drink water</i>):",
+        parse_mode="HTML",
+    )
+    await callback.answer()
 
 
 @router.message(ScheduleForm.waiting_for_topic)
@@ -134,10 +190,17 @@ async def process_topic(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     await state.set_state(ScheduleForm.waiting_for_confirm)
 
+    jitter = data.get("jitter_seconds")
+    jitter_line = (
+        f"• Randomization: {_JITTER_LABELS.get(jitter, f'+{jitter}s')}\n" if jitter else ""
+    )
+
     await message.answer(
         "📋 <b>Confirm your schedule:</b>\n\n"
         f"• Recipient: <code>{data['target']}</code>\n"
         f"• Frequency: {data['interval_label']}\n"
+        f"{jitter_line}"
+        f"• Language: {data.get('language', 'English')}\n"
         f"• Topic: <i>{topic}</i>\n\n"
         "Ready to activate?",
         reply_markup=confirm_keyboard(),
@@ -151,17 +214,27 @@ async def confirm_yes(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await callback.message.edit_reply_markup()  # type: ignore[union-attr]
 
+    jitter: int | None = data.get("jitter_seconds")
+    language: str = data.get("language", "English")
+
+    # Append jitter info to the stored label so /list shows the full picture
+    interval_label = data["interval_label"]
+    if jitter:
+        interval_label += f" ({_JITTER_LABELS.get(jitter, f'+{jitter}s')} randomization)"
+
     try:
         task = await create_task(
             target_username=data["target"],
             topic=data["topic"],
             interval_type=data["interval_type"],
             interval_value=data["interval_value"],
-            interval_label=data["interval_label"],
+            interval_label=interval_label,
+            jitter_seconds=jitter,
+            language=language,
         )
         await callback.message.answer(  # type: ignore[union-attr]
             f"✅ Schedule created! (ID: <code>{task.id}</code>)\n"
-            f"I'll send messages to {task.target_username} {task.interval_label}.",
+            f"Sending to {task.target_username} — {task.interval_label} — {task.language}.",
             parse_mode="HTML",
         )
     except Exception:
@@ -197,14 +270,11 @@ async def cmd_list(message: Message) -> None:
             f"🗓 <b>Schedule #{task.id}</b>\n"
             f"• To: <code>{task.target_username}</code>\n"
             f"• Frequency: {task.interval_label}\n"
+            f"• Language: {task.language}\n"
             f"• Topic: <i>{task.topic}</i>\n"
             f"• Last sent: {last}"
         )
-        await message.answer(
-            text,
-            reply_markup=cancel_task_keyboard(task.id),
-            parse_mode="HTML",
-        )
+        await message.answer(text, reply_markup=cancel_task_keyboard(task.id), parse_mode="HTML")
 
 
 # ── /cancel ───────────────────────────────────────────────────────────────────

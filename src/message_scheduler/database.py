@@ -1,5 +1,6 @@
 from collections.abc import AsyncGenerator
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -24,6 +25,21 @@ async def init_db() -> None:
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+
+async def run_migrations() -> None:
+    """Add columns introduced after initial schema creation.
+
+    Uses IF NOT EXISTS so it is safe to run on every startup.
+    """
+    stmts = [
+        "ALTER TABLE scheduled_tasks ADD COLUMN IF NOT EXISTS jitter_seconds INTEGER",
+        "ALTER TABLE scheduled_tasks ADD COLUMN IF NOT EXISTS "
+        "language VARCHAR(50) NOT NULL DEFAULT 'English'",
+    ]
+    async with engine.begin() as conn:
+        for stmt in stmts:
+            await conn.execute(text(stmt))
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:

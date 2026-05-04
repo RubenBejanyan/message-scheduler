@@ -19,13 +19,7 @@ from .bot.handlers import router
 from .config import settings
 from .database import init_db, run_migrations
 from .scheduler import reload_jobs_from_db, scheduler, set_bot
-from .telegram_client import (
-    reconnect_user_clients,
-    start_client,
-    stop_all_user_clients,
-    stop_client,
-)
-from .users import set_session_status
+from .telegram_client import start_client, stop_client
 
 logging.basicConfig(
     level=logging.INFO,
@@ -57,7 +51,7 @@ async def main() -> None:
     await _init_db_with_retry()
     await run_migrations()
 
-    logger.info("Connecting Telethon owner client…")
+    logger.info("Connecting Telethon user client…")
     try:
         await start_client()
     except Exception as exc:
@@ -67,12 +61,6 @@ async def main() -> None:
             exc,
         )
         return
-
-    logger.info("Reconnecting per-user Telethon sessions…")
-    expired_ids = await reconnect_user_clients()
-    for uid in expired_ids:
-        await set_session_status(uid, False)
-        logger.info("Marked user %d session as expired in DB", uid)
 
     logger.info("Starting APScheduler…")
     scheduler.start()
@@ -88,8 +76,6 @@ async def main() -> None:
         BotCommand(command="schedule", description="Create a new scheduled message"),
         BotCommand(command="list", description="View your active schedules"),
         BotCommand(command="cancel", description="Cancel a schedule"),
-        BotCommand(command="connect", description="Link your Telegram account for sending"),
-        BotCommand(command="disconnect", description="Unlink your Telegram account"),
         BotCommand(command="help", description="Help & all commands"),
     ])
     dp = Dispatcher(storage=MemoryStorage())
@@ -107,7 +93,6 @@ async def main() -> None:
         logger.info("Shutting down…")
         scheduler.shutdown(wait=False)
         await stop_client()
-        await stop_all_user_clients()
         await bot.session.close()
 
 

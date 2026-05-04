@@ -1,17 +1,28 @@
 import logging
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from ..config import settings
 from ..scheduler import cancel_task, create_task, list_active_tasks, parse_interval
+from ..users import (
+    approve_user,
+    get_user,
+    list_approved_users,
+    list_pending_users,
+    register_user,
+    reject_user,
+)
 from .keyboards import (
+    approve_reject_keyboard,
     cancel_task_keyboard,
     confirm_keyboard,
     language_keyboard,
     randomization_keyboard,
+    request_access_keyboard,
+    revoke_keyboard,
 )
 from .states import ScheduleForm
 
@@ -25,52 +36,15 @@ _JITTER_LABELS: dict[int, str] = {
 }
 
 
-def _owner_only(message: Message) -> bool:
-    return message.from_user is not None and message.from_user.id == settings.telegram_owner_id
+def _is_admin(message: Message) -> bool:
+    return message.from_user is not None and message.from_user.id == settings.telegram_admin_id
 
 
-# ── /start  /help ─────────────────────────────────────────────────────────────
-
-
-@router.message(Command("start"))
-async def cmd_start(message: Message) -> None:
-    if not _owner_only(message):
-        return
-    await message.answer(
-        "👋 <b>Message Scheduler Bot</b>\n\n"
-        "I generate AI messages and send them <i>from your account</i> on a schedule.\n\n"
-        "Commands:\n"
-        "/schedule — create a new scheduled message\n"
-        "/list — view active schedules\n"
-        "/cancel — cancel a schedule\n"
-        "/help — show this message",
-        parse_mode="HTML",
-    )
-
-
-@router.message(Command("help"))
-async def cmd_help(message: Message) -> None:
-    if not _owner_only(message):
-        return
-    await cmd_start(message)
-
-
-# ── /schedule wizard ──────────────────────────────────────────────────────────
-
-
-@router.message(Command("schedule"))
-async def cmd_schedule(message: Message, state: FSMContext) -> None:
-    if not _owner_only(message):
-        return
-    await state.clear()
-    await state.set_state(ScheduleForm.waiting_for_target)
-    await message.answer(
-        "Step 1 — <b>Who should receive the messages?</b>\n\n"
-        "Enter a Telegram @username or group @handle:\n"
-        "• <code>@john_doe</code> — private user\n"
-        "• <code>@my_group</code> — group or channel",
-        parse_mode="HTML",
-    )
+async def _is_approved(user_id: int) -> bool:
+    if user_id == settings.telegram_admin_id:
+        return True
+    user = await get_user(user_id)
+    return user is not None and user.is_approved
 
 
 def _parse_jitter_text(raw: str) -> int | None | str:
@@ -93,9 +67,200 @@ def _parse_jitter_text(raw: str) -> int | None | str:
         return "invalid"
 
 
+# ── /start  /help ─────────────────────────────────────────────────────────────
+
+
+@router.message(Command("start"))
+async def cmd_start(message: Message) -> None:
+    if message.from_user is None:
+        return
+
+    uid = message.from_user.id
+
+    if await _is_approved(uid):
+        await message.answer(
+            "👋 <b>Message Scheduler Bot</b>\n\n"
+            "I generate AI messages and send them on a schedule.\n\n"
+            "Commands:\n"
+            "/schedule — create a new scheduled message\n"
+            "/list — view your active schedules\n"
+            "/cancel — cancel a schedule\n"
+            "/help — show this message",
+            parse_mode="HTML",
+        )
+        return
+
+    # Unknown or pending user
+    user = await register_user(
+        telegram_id=uid,
+        first_name=message.from_user.first_name or "Unknown",
+        username=message.from_user.username,
+    )
+
+    if not user.is_approved:
+        await message.answer(
+            "👋 Welcome! This bot is invite-only.\n\n"
+            "Tap the button below to request access from the admin.",
+            reply_markup=request_access_keyboard(),
+        )
+
+
+@router.message(Command("help"))
+async def cmd_help(message: Message) -> None:
+    await cmd_start(message)
+
+
+# ── Registration flow ──────────────────────────────────────────────────────────
+
+
+@router.callback_query(F.data == "request_access")
+async def request_access(callback: CallbackQuery, bot: Bot) -> None:
+    if callback.from_user is None or callback.message is None:
+        return
+
+    uid = callback.from_user.id
+    user = await get_user(uid)
+
+    if user is None:
+        await callback.answer("Please send /start first.", show_alert=True)
+        return
+
+    if user.is_approved:
+        await callback.message.edit_text("You already have access! Use /schedule to get started.")  # type: ignore[union-attr]
+        await callback.answer()
+        return
+
+    # Notify admin
+    display = f"@{user.username}" if user.username else user.first_name
+    await bot.send_message(
+        chat_id=settings.telegram_admin_id,
+        text=(
+            f"🔔 <b>Access request</b>\n\n"
+            f"• Name: {user.first_name}\n"
+            f"• Handle: {display}\n"
+            f"• ID: <code>{uid}</code>"
+        ),
+        reply_markup=approve_reject_keyboard(uid),
+        parse_mode="HTML",
+    )
+
+    await callback.message.edit_text(  # type: ignore[union-attr]
+        "✅ Request sent! You'll be notified once the admin reviews it."
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("approve_user:"))
+async def cb_approve_user(callback: CallbackQuery, bot: Bot) -> None:
+    if not callback.from_user or callback.from_user.id != settings.telegram_admin_id:
+        await callback.answer("Admin only.", show_alert=True)
+        return
+
+    target_id = int(callback.data.split(":")[1])  # type: ignore[union-attr]
+    user = await get_user(target_id)
+    await approve_user(target_id)
+
+    name = user.first_name if user else str(target_id)
+    await callback.message.edit_reply_markup()  # type: ignore[union-attr]
+    await callback.message.answer(f"✅ Approved {name} ({target_id}).")  # type: ignore[union-attr]
+
+    await bot.send_message(
+        chat_id=target_id,
+        text=(
+            "🎉 <b>Access granted!</b>\n\n"
+            "You can now use the bot.\n"
+            "/schedule — create a new scheduled message\n"
+            "/list — view your schedules"
+        ),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("reject_user:"))
+async def cb_reject_user(callback: CallbackQuery, bot: Bot) -> None:
+    if not callback.from_user or callback.from_user.id != settings.telegram_admin_id:
+        await callback.answer("Admin only.", show_alert=True)
+        return
+
+    target_id = int(callback.data.split(":")[1])  # type: ignore[union-attr]
+    user = await get_user(target_id)
+    name = user.first_name if user else str(target_id)
+    await reject_user(target_id)
+
+    await callback.message.edit_reply_markup()  # type: ignore[union-attr]
+    await callback.message.answer(f"🚫 Rejected/revoked {name} ({target_id}).")  # type: ignore[union-attr]
+
+    try:
+        await bot.send_message(
+            chat_id=target_id,
+            text="Sorry, your access request was declined.",
+        )
+    except Exception:
+        pass  # user may have blocked the bot
+    await callback.answer()
+
+
+# ── /users (admin only) ───────────────────────────────────────────────────────
+
+
+@router.message(Command("users"))
+async def cmd_users(message: Message) -> None:
+    if not _is_admin(message):
+        return
+
+    pending = await list_pending_users()
+    approved = await list_approved_users()
+
+    if not pending and not approved:
+        await message.answer("No registered users yet.")
+        return
+
+    if pending:
+        await message.answer(f"<b>Pending ({len(pending)})</b>", parse_mode="HTML")
+        for u in pending:
+            display = f"@{u.username}" if u.username else u.first_name
+            await message.answer(
+                f"• {u.first_name} {display} — <code>{u.telegram_id}</code>",
+                reply_markup=approve_reject_keyboard(u.telegram_id),
+                parse_mode="HTML",
+            )
+
+    if approved:
+        await message.answer(f"<b>Approved ({len(approved)})</b>", parse_mode="HTML")
+        for u in approved:
+            display = f"@{u.username}" if u.username else u.first_name
+            await message.answer(
+                f"• {u.first_name} {display} — <code>{u.telegram_id}</code>",
+                reply_markup=revoke_keyboard(u.telegram_id),
+                parse_mode="HTML",
+            )
+
+
+# ── /schedule wizard ──────────────────────────────────────────────────────────
+
+
+@router.message(Command("schedule"))
+async def cmd_schedule(message: Message, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    if not await _is_approved(message.from_user.id):
+        await message.answer("You don't have access yet. Send /start to request it.")
+        return
+    await state.clear()
+    await state.set_state(ScheduleForm.waiting_for_target)
+    await message.answer(
+        "Step 1 — <b>Who should receive the messages?</b>\n\n"
+        "Enter a Telegram @username or group @handle:\n"
+        "• <code>@john_doe</code> — private user\n"
+        "• <code>@my_group</code> — group or channel",
+        parse_mode="HTML",
+    )
+
+
 @router.message(ScheduleForm.waiting_for_target)
 async def process_target(message: Message, state: FSMContext) -> None:
-    if not _owner_only(message):
+    if message.from_user is None or not await _is_approved(message.from_user.id):
         return
     text = (message.text or "").strip()
     if not text.startswith("@") or len(text) < 2:
@@ -117,7 +282,7 @@ async def process_target(message: Message, state: FSMContext) -> None:
 
 @router.message(ScheduleForm.waiting_for_interval)
 async def process_interval(message: Message, state: FSMContext) -> None:
-    if not _owner_only(message):
+    if message.from_user is None or not await _is_approved(message.from_user.id):
         return
     text = (message.text or "").strip()
     parsed = parse_interval(text)
@@ -147,7 +312,6 @@ async def process_interval(message: Message, state: FSMContext) -> None:
     )
 
     if interval_type == "window":
-        # Window already encodes randomization — skip that step
         await state.update_data(jitter_seconds=None)
         await state.set_state(ScheduleForm.waiting_for_language)
         await message.answer(
@@ -184,8 +348,7 @@ async def process_randomization(callback: CallbackQuery, state: FSMContext) -> N
 
 @router.message(ScheduleForm.waiting_for_randomization)
 async def process_randomization_text(message: Message, state: FSMContext) -> None:
-    """Handle free-text jitter input, e.g. '45m', '3h', '90' (minutes), 'none'."""
-    if not _owner_only(message):
+    if message.from_user is None or not await _is_approved(message.from_user.id):
         return
     result = _parse_jitter_text((message.text or "").strip())
     if result == "invalid":
@@ -225,7 +388,7 @@ async def process_language(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(ScheduleForm.waiting_for_topic)
 async def process_topic(message: Message, state: FSMContext) -> None:
-    if not _owner_only(message):
+    if message.from_user is None or not await _is_approved(message.from_user.id):
         return
     topic = (message.text or "").strip()
     if len(topic) < 3:
@@ -256,6 +419,8 @@ async def process_topic(message: Message, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "confirm_yes", ScheduleForm.waiting_for_confirm)
 async def confirm_yes(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.from_user is None:
+        return
     data = await state.get_data()
     await state.clear()
     await callback.message.edit_reply_markup()  # type: ignore[union-attr]
@@ -263,13 +428,13 @@ async def confirm_yes(callback: CallbackQuery, state: FSMContext) -> None:
     jitter: int | None = data.get("jitter_seconds")
     language: str = data.get("language", "English")
 
-    # Append jitter info to the stored label so /list shows the full picture
     interval_label = data["interval_label"]
     if jitter:
         interval_label += f" ({_JITTER_LABELS.get(jitter, f'+{jitter}s')} randomization)"
 
     try:
         task = await create_task(
+            user_telegram_id=callback.from_user.id,
             target_username=data["target"],
             topic=data["topic"],
             interval_type=data["interval_type"],
@@ -303,9 +468,13 @@ async def confirm_no(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(Command("list"))
 async def cmd_list(message: Message) -> None:
-    if not _owner_only(message):
+    if message.from_user is None:
         return
-    tasks = await list_active_tasks()
+    if not await _is_approved(message.from_user.id):
+        await message.answer("You don't have access yet. Send /start to request it.")
+        return
+
+    tasks = await list_active_tasks(message.from_user.id)
     if not tasks:
         await message.answer("No active schedules. Use /schedule to create one.")
         return
@@ -328,15 +497,19 @@ async def cmd_list(message: Message) -> None:
 
 @router.message(Command("cancel"))
 async def cmd_cancel(message: Message) -> None:
-    if not _owner_only(message):
+    if message.from_user is None:
+        return
+    if not await _is_approved(message.from_user.id):
         return
     await message.answer("Use the 🗑 buttons in /list to cancel a specific schedule.")
 
 
 @router.callback_query(F.data.startswith("cancel_task:"))
 async def cancel_task_callback(callback: CallbackQuery) -> None:
+    if callback.from_user is None:
+        return
     task_id = int(callback.data.split(":")[1])  # type: ignore[union-attr]
-    success = await cancel_task(task_id)
+    success = await cancel_task(task_id, callback.from_user.id)
     await callback.message.edit_reply_markup()  # type: ignore[union-attr]
     if success:
         await callback.message.answer(f"🗑 Schedule #{task_id} cancelled.")  # type: ignore[union-attr]

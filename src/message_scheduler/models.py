@@ -1,9 +1,23 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, func
+from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
+
+
+class RegisteredUser(Base):
+    """A Telegram user who has been granted access to the bot."""
+
+    __tablename__ = "registered_users"
+
+    telegram_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    username: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    first_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    is_approved: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class ScheduledTask(Base):
@@ -12,6 +26,7 @@ class ScheduledTask(Base):
     __tablename__ = "scheduled_tasks"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_telegram_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     target_username: Mapped[str] = mapped_column(String(100), nullable=False)
     topic: Mapped[str] = mapped_column(Text, nullable=False)
 

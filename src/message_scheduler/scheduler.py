@@ -2,17 +2,25 @@ import logging
 import uuid
 from datetime import UTC, datetime
 
+from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select, update
 
 from .ai_generator import generate_message
 from .database import async_session_factory
 from .models import ScheduledTask
-from .telegram_client import get_recipient_info, send_message_as_user
+from .telegram_client import get_recipient_info
 
 logger = logging.getLogger(__name__)
 
 scheduler = AsyncIOScheduler(timezone="UTC")
+
+_bot: Bot | None = None
+
+
+def set_bot(bot: Bot) -> None:
+    global _bot
+    _bot = bot
 
 
 async def _execute_job(task_id: int) -> None:
@@ -22,12 +30,16 @@ async def _execute_job(task_id: int) -> None:
         if task is None or not task.is_active:
             return
 
+    if _bot is None:
+        logger.error("Bot not initialised — cannot send message for job %s", task_id)
+        return
+
     try:
         recipient_info = await get_recipient_info(task.target_username)
         text = await generate_message(
             task.target_username, task.topic, task.language, recipient_info
         )
-        await send_message_as_user(task.target_username, text)
+        await _bot.send_message(chat_id=task.target_username, text=text)
 
         async with async_session_factory() as session:
             await session.execute(
@@ -98,12 +110,13 @@ async def reload_jobs_from_db() -> None:
 
     for task in tasks:
         _add_apscheduler_job(task)
-        logger.info(  # noqa: E501
+        logger.info(
             "Restored job: %s → %s every %s", task.job_id, task.target_username, task.interval_label
         )
 
 
 async def create_task(
+    user_telegram_id: int,
     target_username: str,
     topic: str,
     interval_type: str,
@@ -116,6 +129,7 @@ async def create_task(
     job_id = f"task_{uuid.uuid4().hex[:12]}"
 
     task = ScheduledTask(
+        user_telegram_id=user_telegram_id,
         target_username=target_username,
         topic=topic,
         interval_type=interval_type,
@@ -136,11 +150,14 @@ async def create_task(
     return task
 
 
-async def cancel_task(task_id: int) -> bool:
-    """Deactivate a task and remove it from APScheduler."""
+async def cancel_task(task_id: int, user_telegram_id: int) -> bool:
+    """Deactivate a task and remove it from APScheduler.
+
+    Returns False if the task doesn't exist or belongs to a different user.
+    """
     async with async_session_factory() as session:
         task = await session.get(ScheduledTask, task_id)
-        if task is None:
+        if task is None or task.user_telegram_id != user_telegram_id:
             return False
         task.is_active = False
         await session.commit()
@@ -152,11 +169,14 @@ async def cancel_task(task_id: int) -> bool:
     return True
 
 
-async def list_active_tasks() -> list[ScheduledTask]:
+async def list_active_tasks(user_telegram_id: int) -> list[ScheduledTask]:
     async with async_session_factory() as session:
         result = await session.execute(
             select(ScheduledTask)
-            .where(ScheduledTask.is_active == True)  # noqa: E712
+            .where(
+                ScheduledTask.is_active == True,  # noqa: E712
+                ScheduledTask.user_telegram_id == user_telegram_id,
+            )
             .order_by(ScheduledTask.created_at)
         )
         return list(result.scalars().all())

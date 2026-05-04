@@ -18,7 +18,7 @@ from aiogram.types import BotCommand
 from .bot.handlers import router
 from .config import settings
 from .database import init_db, run_migrations
-from .scheduler import reload_jobs_from_db, scheduler
+from .scheduler import reload_jobs_from_db, scheduler, set_bot
 from .telegram_client import start_client, stop_client
 
 logging.basicConfig(
@@ -71,9 +71,10 @@ async def main() -> None:
         token=settings.telegram_bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
+    set_bot(bot)
     await bot.set_my_commands([
         BotCommand(command="schedule", description="Create a new scheduled message"),
-        BotCommand(command="list", description="View active schedules"),
+        BotCommand(command="list", description="View your active schedules"),
         BotCommand(command="cancel", description="Cancel a schedule"),
         BotCommand(command="help", description="Help & all commands"),
     ])

@@ -48,3 +48,23 @@ def language_keyboard() -> InlineKeyboardMarkup:
         builder.button(text=label, callback_data=data)
     builder.adjust(2)
     return builder.as_markup()
+
+
+def request_access_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📨 Request access", callback_data="request_access")
+    return builder.as_markup()
+
+
+def approve_reject_keyboard(telegram_id: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Approve", callback_data=f"approve_user:{telegram_id}")
+    builder.button(text="❌ Reject", callback_data=f"reject_user:{telegram_id}")
+    builder.adjust(2)
+    return builder.as_markup()
+
+
+def revoke_keyboard(telegram_id: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🚫 Revoke access", callback_data=f"reject_user:{telegram_id}")
+    return builder.as_markup()

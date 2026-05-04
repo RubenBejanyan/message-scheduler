@@ -12,7 +12,7 @@ class Settings(BaseSettings):
 
     # Telegram bot
     telegram_bot_token: str
-    telegram_owner_id: int
+    telegram_admin_id: int
 
     # Telethon (user account)
     telegram_api_id: int

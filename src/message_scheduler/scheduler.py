@@ -8,7 +8,7 @@ from sqlalchemy import select, update
 from .ai_generator import generate_message
 from .database import async_session_factory
 from .models import ScheduledTask
-from .telegram_client import send_message_as_user
+from .telegram_client import get_recipient_info, send_message_as_user
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,10 @@ async def _execute_job(task_id: int) -> None:
             return
 
     try:
-        text = await generate_message(task.target_username, task.topic, task.language)
+        recipient_info = await get_recipient_info(task.target_username)
+        text = await generate_message(
+            task.target_username, task.topic, task.language, recipient_info
+        )
         await send_message_as_user(task.target_username, text)
 
         async with async_session_factory() as session:

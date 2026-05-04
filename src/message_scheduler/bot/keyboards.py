@@ -16,6 +16,7 @@ LANGUAGE_OPTIONS: list[tuple[str, str]] = [
     ("🇩🇪 German", "lang:German"),
     ("🇫🇷 French", "lang:French"),
     ("🇪🇸 Spanish", "lang:Spanish"),
+    ("🇮🇹 Italian", "lang:Italian"),
 ]
 
 

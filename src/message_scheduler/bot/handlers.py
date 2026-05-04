@@ -66,9 +66,31 @@ async def cmd_schedule(message: Message, state: FSMContext) -> None:
     await state.set_state(ScheduleForm.waiting_for_target)
     await message.answer(
         "Step 1 — <b>Who should receive the messages?</b>\n\n"
-        "Enter the Telegram username (e.g. <code>@john_doe</code>):",
+        "Enter a Telegram @username or group @handle:\n"
+        "• <code>@john_doe</code> — private user\n"
+        "• <code>@my_group</code> — group or channel",
         parse_mode="HTML",
     )
+
+
+def _parse_jitter_text(raw: str) -> int | None | str:
+    """Parse a free-text jitter value.
+
+    Returns seconds (int), None for 'no jitter', or 'invalid' string on bad input.
+    """
+    t = raw.strip().lower()
+    if t in ("none", "no", "0", "off", "never"):
+        return None
+    for suffix, mult in (("h", 3600), ("m", 60)):
+        if t.endswith(suffix):
+            try:
+                return int(t[:-1]) * mult
+            except ValueError:
+                return "invalid"
+    try:
+        return int(t) * 60  # bare number → minutes
+    except ValueError:
+        return "invalid"
 
 
 @router.message(ScheduleForm.waiting_for_target)
@@ -77,19 +99,18 @@ async def process_target(message: Message, state: FSMContext) -> None:
         return
     text = (message.text or "").strip()
     if not text.startswith("@") or len(text) < 2:
-        await message.answer("Please enter a valid username starting with @")
+        await message.answer("Please enter a valid @username or @group handle.")
         return
 
     await state.update_data(target=text)
     await state.set_state(ScheduleForm.waiting_for_interval)
     await message.answer(
         "Step 2 — <b>How often / when should I send?</b>\n\n"
-        "Examples:\n"
         "• <code>30m</code> — every 30 minutes\n"
         "• <code>2h</code> — every 2 hours\n"
         "• <code>1d</code> — every day\n"
         "• <code>daily 09:00</code> — every day at 09:00 UTC\n"
-        "• <code>window 15:15-15:50</code> — daily at a random time between 15:15 and 15:50 UTC",
+        "• <code>window 15:15-15:50</code> — daily at a random time in that range",
         parse_mode="HTML",
     )
 
@@ -138,7 +159,9 @@ async def process_interval(message: Message, state: FSMContext) -> None:
         await state.set_state(ScheduleForm.waiting_for_randomization)
         await message.answer(
             "Step 3 — <b>Randomization</b>\n\n"
-            "Should I add a random delay so messages don't always arrive at the exact same time?",
+            "Add a random delay so messages don't always arrive at the exact same time.\n\n"
+            "Pick a preset or type a custom amount (e.g. <code>45m</code>, <code>3h</code>, "
+            "<code>90</code> for 90 minutes):",
             reply_markup=randomization_keyboard(),
             parse_mode="HTML",
         )
@@ -157,6 +180,29 @@ async def process_randomization(callback: CallbackQuery, state: FSMContext) -> N
         parse_mode="HTML",
     )
     await callback.answer()
+
+
+@router.message(ScheduleForm.waiting_for_randomization)
+async def process_randomization_text(message: Message, state: FSMContext) -> None:
+    """Handle free-text jitter input, e.g. '45m', '3h', '90' (minutes), 'none'."""
+    if not _owner_only(message):
+        return
+    result = _parse_jitter_text((message.text or "").strip())
+    if result == "invalid":
+        await message.answer(
+            "Could not parse that. Use a preset button or type e.g. "
+            "<code>45m</code>, <code>3h</code>, <code>90</code> (minutes), or <code>none</code>.",
+            parse_mode="HTML",
+        )
+        return
+    jitter: int | None = result  # type: ignore[assignment]
+    await state.update_data(jitter_seconds=jitter)
+    await state.set_state(ScheduleForm.waiting_for_language)
+    await message.answer(
+        "Step 4 — <b>Language?</b>\n\nChoose the language for the generated messages:",
+        reply_markup=language_keyboard(),
+        parse_mode="HTML",
+    )
 
 
 @router.callback_query(F.data.startswith("lang:"), ScheduleForm.waiting_for_language)

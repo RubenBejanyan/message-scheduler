@@ -2,6 +2,8 @@ import logging
 
 from telethon import TelegramClient
 from telethon.errors import FloodWaitError, UserPrivacyRestrictedError
+from telethon.tl.functions.users import GetFullUserRequest
+from telethon.tl.types import User
 
 from .config import settings
 
@@ -27,7 +29,6 @@ def get_telegram_client() -> TelegramClient:
 async def start_client() -> None:
     client = get_telegram_client()
     if not client.is_connected():
-        # No interactive prompt — session file must already exist (run setup_session.py first)
         await client.start()
         me = await client.get_me()
         logger.info("Telethon connected as: %s (@%s)", me.first_name, me.username)
@@ -36,6 +37,32 @@ async def start_client() -> None:
 async def stop_client() -> None:
     if _client and _client.is_connected():
         await _client.disconnect()
+
+
+async def get_recipient_info(target: str) -> dict[str, str]:
+    """Fetch publicly available info about the target for AI personalisation.
+
+    Returns a dict with keys: name, type ("user" | "group"), bio.
+    Returns an empty dict on any error — callers treat missing info as optional.
+    """
+    client = get_telegram_client()
+    try:
+        entity = await client.get_entity(target)
+        if isinstance(entity, User):
+            name = " ".join(p for p in [entity.first_name or "", entity.last_name or ""] if p)
+            bio = ""
+            try:
+                full = await client(GetFullUserRequest(entity))
+                bio = (getattr(full.full_user, "about", None) or "").strip()
+            except Exception:
+                pass
+            return {"name": name, "type": "user", "bio": bio}
+        else:
+            title = getattr(entity, "title", None) or target
+            return {"name": title, "type": "group", "bio": ""}
+    except Exception:
+        logger.warning("Could not fetch recipient info for %s", target)
+        return {}
 
 
 async def send_message_as_user(target_username: str, text: str) -> None:

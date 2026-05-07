@@ -1,12 +1,12 @@
 import asyncio
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from alembic import context
+from message_scheduler import models  # noqa: F401 — registers all mapped classes
 from message_scheduler.config import settings
 from message_scheduler.database import Base
-from message_scheduler import models  # noqa: F401 — registers all mapped classes
 
 config = context.config
 if config.config_file_name is not None:

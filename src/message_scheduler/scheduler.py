@@ -10,6 +10,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import func, select, update
 
 from .ai_generator import generate_message
+from .config import settings
 from .database import async_session_factory
 from .models import ScheduledTask, SentMessage
 
@@ -47,6 +48,12 @@ async def _notify_owner(uid: int, text: str) -> None:
         logger.warning("Could not deliver owner notification to %d", uid)
 
 
+async def _build_message(task: ScheduledTask) -> str:
+    if task.message_mode == "exact" and task.messages_json:
+        return str(random.choice(json.loads(task.messages_json)))
+    return await generate_message(task.target_username, task.topic, task.language)
+
+
 async def _execute_job(task_id: int) -> None:
     """Called by APScheduler for each scheduled message."""
     async with async_session_factory() as session:
@@ -56,10 +63,7 @@ async def _execute_job(task_id: int) -> None:
     # task attributes remain accessible (expire_on_commit=False)
 
     try:
-        if task.message_mode == "exact" and task.messages_json:
-            text = str(random.choice(json.loads(task.messages_json)))
-        else:
-            text = await generate_message(task.target_username, task.topic, task.language)
+        text = await _build_message(task)
         if _bot is None:
             raise RuntimeError("Bot instance not set — call set_bot() on startup")
         await _bot.send_message(chat_id=task.target_username, text=text)
@@ -102,7 +106,25 @@ async def _execute_job(task_id: int) -> None:
 
         logger.exception("Job %s failed (consecutive #%d)", task_id, failures)
 
-        if task.user_telegram_id and (failures == 1 or failures % 5 == 0):
+        if failures >= settings.max_consecutive_failures:
+            async with async_session_factory() as session:
+                await session.execute(
+                    update(ScheduledTask)
+                    .where(ScheduledTask.id == task_id)
+                    .values(is_paused=True)
+                )
+                await session.commit()
+            if scheduler.get_job(task.job_id):
+                scheduler.remove_job(task.job_id)
+            if task.user_telegram_id:
+                await _notify_owner(
+                    task.user_telegram_id,
+                    f"⏸ <b>Schedule #{task_id} auto-paused</b>\n"
+                    f"Failed {failures} times in a row sending to "
+                    f"<code>{task.target_username}</code>.\n\n"
+                    f"Use /list to review and resume.",
+                )
+        elif task.user_telegram_id and (failures == 1 or failures % 5 == 0):
             await _notify_owner(
                 task.user_telegram_id,
                 f"⚠️ <b>Schedule #{task_id} failed</b> (×{failures})\n"
@@ -118,11 +140,7 @@ async def fire_task_now(task_id: int) -> str:
         if task is None or not task.is_active:
             raise ValueError(f"Task #{task_id} not found or inactive")
 
-    if task.message_mode == "exact" and task.messages_json:
-        text = str(random.choice(json.loads(task.messages_json)))
-    else:
-        text = await generate_message(task.target_username, task.topic, task.language)
-
+    text = await _build_message(task)
     if _bot is None:
         raise RuntimeError("Bot instance not set — call set_bot() on startup")
     await _bot.send_message(chat_id=task.target_username, text=text)
@@ -292,12 +310,7 @@ async def resume_task(task_id: int, user_telegram_id: int, force: bool = False) 
             return False
         task.is_paused = False
         await session.commit()
-
-    async with async_session_factory() as session:
-        task = await session.get(ScheduledTask, task_id)
-        if task is None:
-            return False
-
+    # expire_on_commit=False — task attributes still valid after session closes
     _add_apscheduler_job(task)
     return True
 
@@ -360,13 +373,9 @@ async def update_task_interval(
         task.interval_value = interval_value
         task.interval_label = interval_label
         await session.commit()
-
-    # Re-register job with new schedule if currently active
-    async with async_session_factory() as session:
-        refreshed = await session.get(ScheduledTask, task_id)
-        if refreshed and not refreshed.is_paused:
-            _add_apscheduler_job(refreshed)  # replace_existing=True handles update
-
+    # expire_on_commit=False — task attributes still valid after session closes
+    if not task.is_paused:
+        _add_apscheduler_job(task)
     return True
 
 

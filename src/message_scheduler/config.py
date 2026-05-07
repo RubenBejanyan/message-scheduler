@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     # App
     min_interval_minutes: int = 5
     max_schedules_per_user: int = 10
+    max_consecutive_failures: int = 10
 
 
 settings = Settings()  # type: ignore[call-arg]

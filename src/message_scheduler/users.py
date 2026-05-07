@@ -10,7 +10,7 @@ async def get_user(telegram_id: int) -> RegisteredUser | None:
 
 
 async def register_user(telegram_id: int, first_name: str, username: str | None) -> RegisteredUser:
-    """Create auto-approved user record; returns existing record if already known."""
+    """Create or update a user record; always syncs first_name and username."""
     async with async_session_factory() as session:
         user = await session.get(RegisteredUser, telegram_id)
         if user is None:
@@ -21,8 +21,11 @@ async def register_user(telegram_id: int, first_name: str, username: str | None)
                 is_approved=True,
             )
             session.add(user)
-            await session.commit()
-            await session.refresh(user)
+        else:
+            user.first_name = first_name
+            user.username = username
+        await session.commit()
+        await session.refresh(user)
         return user
 
 

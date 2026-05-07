@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Index, Integer, String, Text, func
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -82,7 +82,9 @@ class SentMessage(Base):
     __table_args__ = (Index("ix_sent_messages_task_id", "task_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    task_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    task_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("scheduled_tasks.id", ondelete="CASCADE"), nullable=False
+    )
     user_telegram_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     target_username: Mapped[str] = mapped_column(String(100), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)

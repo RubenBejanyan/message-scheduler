@@ -218,7 +218,7 @@ async def cb_block_user(callback: CallbackQuery, bot: Bot) -> None:
     try:
         await bot.send_message(chat_id=target_id, text="You have been blocked from using this bot.")
     except Exception:
-        pass
+        logger.warning("Could not notify blocked user %d", target_id)
     await callback.answer()
 
 
@@ -241,7 +241,7 @@ async def cb_unblock_user(callback: CallbackQuery, bot: Bot) -> None:
             text="Your access has been restored. Use /schedule to get started.",
         )
     except Exception:
-        pass
+        logger.warning("Could not notify unblocked user %d", target_id)
     await callback.answer()
 
 
@@ -265,7 +265,7 @@ async def cb_grant_admin(callback: CallbackQuery, bot: Bot) -> None:
             text="👑 You have been granted admin permissions for this bot.",
         )
     except Exception:
-        pass
+        logger.warning("Could not notify user %d of admin grant", target_id)
     await callback.answer()
 
 
@@ -286,7 +286,7 @@ async def cb_revoke_admin(callback: CallbackQuery, bot: Bot) -> None:
             text="Your admin permissions have been revoked.",
         )
     except Exception:
-        pass
+        logger.warning("Could not notify user %d of admin revoke", target_id)
     await callback.answer()
 
 
@@ -771,7 +771,7 @@ async def send_now_callback(callback: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("history:"))
 async def cb_history(callback: CallbackQuery) -> None:
     task_id = int(callback.data.split(":")[1])  # type: ignore[union-attr]
-    entries = await get_task_history(task_id, limit=5)
+    entries = await get_task_history(task_id, limit=10)
     if not entries:
         await callback.answer("No history yet.", show_alert=True)
         return

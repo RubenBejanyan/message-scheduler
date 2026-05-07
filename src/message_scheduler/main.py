@@ -38,7 +38,7 @@ def _run_migrations(attempts: int = 5, delay: float = 4.0) -> None:
     for attempt in range(1, attempts + 1):
         try:
             command.upgrade(cfg, "head")
-            return
+            break
         except Exception as exc:
             if attempt == attempts:
                 raise
@@ -47,6 +47,14 @@ def _run_migrations(attempts: int = 5, delay: float = 4.0) -> None:
                 attempt, attempts, exc, delay,
             )
             time.sleep(delay)
+
+    # Alembic's fileConfig sets root logger to WARN — restore our config.
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        stream=sys.stdout,
+        force=True,
+    )
 
 
 async def main() -> None:

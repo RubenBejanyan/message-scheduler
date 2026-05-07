@@ -17,7 +17,25 @@
       "PowerShell(cmd /c \"dir C:\\\\projects\\\\apps\\\\message_scheduler\\\\src\\\\message_scheduler /b /a /s\" 2>&1)",
       "PowerShell(git --version; python --version 2>&1)",
       "PowerShell(winget *)",
-      "PowerShell(gh *)"
+      "PowerShell(gh *)",
+      "PowerShell(Get-Service *)",
+      "PowerShell(ssh-add *)",
+      "PowerShell(ssh -T git@github.com 2>&1)",
+      "PowerShell(git config *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Bash(docker compose *)",
+      "PowerShell(docker compose *)",
+      "PowerShell(git *)",
+      "PowerShell(docker build *)",
+      "PowerShell(New-Item *)",
+      "Read(//mnt/c/projects/apps/**)",
+      "Bash(uv run *)",
+      "PowerShell(Stop-Service *)",
+      "PowerShell(tasklist *)",
+      "Bash(git rm *)",
+      "Bash(gh run *)"
     ]
   }
 }

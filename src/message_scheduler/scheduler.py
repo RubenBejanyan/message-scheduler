@@ -12,7 +12,6 @@ from sqlalchemy import func, select, update
 from .ai_generator import generate_message
 from .database import async_session_factory
 from .models import ScheduledTask, SentMessage
-from .telegram_client import get_recipient_info
 
 logger = logging.getLogger(__name__)
 
@@ -60,10 +59,7 @@ async def _execute_job(task_id: int) -> None:
         if task.message_mode == "exact" and task.messages_json:
             text = str(random.choice(json.loads(task.messages_json)))
         else:
-            recipient_info = await get_recipient_info(task.target_username)
-            text = await generate_message(
-                task.target_username, task.topic, task.language, recipient_info
-            )
+            text = await generate_message(task.target_username, task.topic, task.language)
         if _bot is None:
             raise RuntimeError("Bot instance not set — call set_bot() on startup")
         await _bot.send_message(chat_id=task.target_username, text=text)
@@ -125,10 +121,7 @@ async def fire_task_now(task_id: int) -> str:
     if task.message_mode == "exact" and task.messages_json:
         text = str(random.choice(json.loads(task.messages_json)))
     else:
-        recipient_info = await get_recipient_info(task.target_username)
-        text = await generate_message(
-            task.target_username, task.topic, task.language, recipient_info
-        )
+        text = await generate_message(task.target_username, task.topic, task.language)
 
     if _bot is None:
         raise RuntimeError("Bot instance not set — call set_bot() on startup")

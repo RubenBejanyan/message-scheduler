@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,11 +11,6 @@ class Settings(BaseSettings):
     # Telegram bot
     telegram_bot_token: str
     telegram_admin_id: int
-
-    # Telethon (user account)
-    telegram_api_id: int
-    telegram_api_hash: str
-    telethon_session_path: Path = Path("./user_session")
 
     # AI provider
     openai_api_key: str

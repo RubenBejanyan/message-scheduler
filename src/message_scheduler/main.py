@@ -19,7 +19,6 @@ from aiogram.types import BotCommand
 from .bot.handlers import router
 from .config import settings
 from .scheduler import reload_jobs_from_db, scheduler, set_bot
-from .telegram_client import start_client, stop_client
 
 logging.basicConfig(
     level=logging.INFO,
@@ -53,14 +52,6 @@ def _run_migrations(attempts: int = 5, delay: float = 4.0) -> None:
 async def main() -> None:
     logger.info("Starting Message Scheduler…")
 
-    logger.info("Connecting Telethon user client…")
-    try:
-        await start_client()
-    except Exception as exc:
-        logger.warning(
-            "Telethon failed to connect (%s). Recipient info enrichment will be disabled.", exc
-        )
-
     logger.info("Starting APScheduler…")
     scheduler.start()
     await reload_jobs_from_db()
@@ -91,7 +82,6 @@ async def main() -> None:
     finally:
         logger.info("Shutting down…")
         scheduler.shutdown(wait=False)
-        await stop_client()
         await bot.session.close()
 
 

@@ -18,7 +18,6 @@ LANGUAGE: Write as a NATIVE speaker of {language}. Think and compose directly \
 in {language} — do NOT mentally translate from English. Use idioms, register, \
 and expressions that feel completely natural in {language} culture.
 
-{recipient_block}\
 RULES:
 - 2–4 sentences maximum
 - Casual, warm, friend-to-friend tone
@@ -41,38 +40,12 @@ def get_client() -> AsyncOpenAI:
     return _client
 
 
-def _build_system_prompt(language: str, recipient_info: dict[str, str]) -> str:
-    parts: list[str] = []
-    if name := recipient_info.get("name"):
-        parts.append(f"Recipient's name: {name}")
-    if bio := recipient_info.get("bio"):
-        parts.append(f"Recipient's bio: {bio[:300]}")
-    if recipient_info.get("type") == "group":
-        parts.append("This is a group chat — write a message appropriate for a group audience")
-
-    recipient_block = ""
-    if parts:
-        recipient_block = "RECIPIENT CONTEXT:\n" + "\n".join(f"- {p}" for p in parts) + "\n\n"
-
-    return _SYSTEM_PROMPT.format(language=language, recipient_block=recipient_block)
-
-
-async def generate_message(
-    target_username: str,
-    topic: str,
-    language: str = "English",
-    recipient_info: dict[str, str] | None = None,
-) -> str:
-    """Generate a personalised message for the given target, topic, and language."""
+async def generate_message(target_username: str, topic: str, language: str = "English") -> str:
+    """Generate a personalised Telegram message for the given target and topic."""
     recipient = target_username.lstrip("@")
-    system = _build_system_prompt(language, recipient_info or {})
-
-    name_hint = ""
-    if recipient_info and (name := recipient_info.get("name")):
-        name_hint = f"Their name is {name}. "
-
+    system = _SYSTEM_PROMPT.format(language=language)
     user_prompt = (
-        f"Write a Telegram message to @{recipient}. {name_hint}"
+        f"Write a Telegram message to @{recipient}. "
         f"Topic / context: {topic}\n"
         f"Compose directly in {language} — do not translate."
     )

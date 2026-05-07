@@ -5,7 +5,6 @@ description = "AI-powered Telegram message scheduler — sends messages from you
 requires-python = ">=3.14"
 dependencies = [
     "aiogram>=3.16",
-    "telethon>=1.39",
     "openai>=1.77",
     "apscheduler>=3.11",
     "sqlalchemy[asyncio]>=2.0",

@@ -9,6 +9,7 @@ from ..config import settings
 from ..scheduler import (
     cancel_task,
     create_task,
+    fire_task_now,
     get_next_run_time,
     list_active_tasks,
     list_all_active_tasks,
@@ -466,6 +467,11 @@ async def cmd_list(message: Message) -> None:
             if is_admin
             else ""
         )
+        failure_line = (
+            f"• ⚠️ Failures: {task.consecutive_failures} consecutive\n"
+            if task.consecutive_failures > 0
+            else ""
+        )
         text = (
             f"🗓 <b>Schedule #{task.id}</b>\n"
             f"{owner_line}"
@@ -474,9 +480,12 @@ async def cmd_list(message: Message) -> None:
             f"• Language: {task.language}\n"
             f"• Topic: <i>{task.topic}</i>\n"
             f"• Last sent: {last}\n"
-            f"• Next run: {next_run}"
+            f"• Next run: {next_run}\n"
+            f"{failure_line}"
         )
-        await message.answer(text, reply_markup=cancel_task_keyboard(task.id), parse_mode="HTML")
+        await message.answer(
+            text.rstrip(), reply_markup=cancel_task_keyboard(task.id), parse_mode="HTML"
+        )
 
 
 # ── /cancel ───────────────────────────────────────────────────────────────────
@@ -505,3 +514,31 @@ async def cancel_task_callback(callback: CallbackQuery) -> None:
     else:
         await callback.message.answer(f"Schedule #{task_id} not found.")  # type: ignore[union-attr]
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("send_now:"))
+async def send_now_callback(callback: CallbackQuery) -> None:
+    if callback.from_user is None:
+        return
+    task_id = int(callback.data.split(":")[1])  # type: ignore[union-attr]
+    uid = callback.from_user.id
+    is_admin = uid == settings.telegram_admin_id
+
+    if not is_admin and not await _is_approved(uid):
+        await callback.answer("Access denied.", show_alert=True)
+        return
+
+    await callback.answer("Generating…")
+    try:
+        text = await fire_task_now(task_id)
+        await callback.message.answer(  # type: ignore[union-attr]
+            f"✅ <b>Sent (Schedule #{task_id}):</b>\n\n{text}",
+            parse_mode="HTML",
+        )
+    except ValueError as exc:
+        await callback.message.answer(f"❌ {exc}", parse_mode="HTML")  # type: ignore[union-attr]
+    except Exception as exc:
+        logger.exception("Manual send failed for task %d", task_id)
+        await callback.message.answer(  # type: ignore[union-attr]
+            f"❌ <b>Send failed:</b> <i>{exc}</i>", parse_mode="HTML"
+        )

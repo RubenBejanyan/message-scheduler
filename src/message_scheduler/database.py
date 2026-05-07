@@ -43,6 +43,9 @@ async def run_migrations() -> None:
         "send_as VARCHAR(10) NOT NULL DEFAULT 'bot'",
         "ALTER TABLE registered_users ADD COLUMN IF NOT EXISTS "
         "has_telethon_session BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE scheduled_tasks ADD COLUMN IF NOT EXISTS "
+        "consecutive_failures INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE scheduled_tasks ADD COLUMN IF NOT EXISTS last_error TEXT",
     ]
     async with engine.begin() as conn:
         for stmt in stmts:

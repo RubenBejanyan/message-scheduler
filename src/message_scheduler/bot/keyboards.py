@@ -30,7 +30,9 @@ def confirm_keyboard() -> InlineKeyboardMarkup:
 
 def cancel_task_keyboard(task_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
+    builder.button(text="▶ Send now", callback_data=f"send_now:{task_id}")
     builder.button(text="🗑 Cancel this task", callback_data=f"cancel_task:{task_id}")
+    builder.adjust(1)
     return builder.as_markup()
 
 

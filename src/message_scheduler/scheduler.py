@@ -24,12 +24,22 @@ def set_bot(bot: Bot) -> None:
     _bot = bot
 
 
+async def _notify_owner(uid: int, text: str) -> None:
+    if _bot is None:
+        return
+    try:
+        await _bot.send_message(chat_id=uid, text=text, parse_mode="HTML")
+    except Exception:
+        logger.warning("Could not deliver owner notification to %d", uid)
+
+
 async def _execute_job(task_id: int) -> None:
     """Called by APScheduler for each scheduled message."""
     async with async_session_factory() as session:
         task = await session.get(ScheduledTask, task_id)
         if task is None or not task.is_active:
             return
+    # task attributes remain accessible (expire_on_commit=False)
 
     try:
         recipient_info = await get_recipient_info(task.target_username)
@@ -40,17 +50,76 @@ async def _execute_job(task_id: int) -> None:
             raise RuntimeError("Bot instance not set — call set_bot() on startup")
         await _bot.send_message(chat_id=task.target_username, text=text)
 
+        prev_failures = task.consecutive_failures
         async with async_session_factory() as session:
             await session.execute(
                 update(ScheduledTask)
                 .where(ScheduledTask.id == task_id)
-                .values(last_sent_at=datetime.now(tz=UTC))
+                .values(
+                    last_sent_at=datetime.now(tz=UTC),
+                    consecutive_failures=0,
+                    last_error=None,
+                )
             )
             await session.commit()
 
         logger.info("Job %s: sent to %s", task.job_id, task.target_username)
-    except Exception:
-        logger.exception("Job %s failed", task_id)
+
+        if prev_failures > 0 and task.user_telegram_id:
+            await _notify_owner(
+                task.user_telegram_id,
+                f"✅ <b>Schedule #{task_id} recovered</b>\n"
+                f"Delivered to <code>{task.target_username}</code> "
+                f"(was failing for {prev_failures} attempt(s)).",
+            )
+
+    except Exception as exc:
+        failures = task.consecutive_failures + 1
+        error_str = str(exc)[:500]
+
+        async with async_session_factory() as session:
+            await session.execute(
+                update(ScheduledTask)
+                .where(ScheduledTask.id == task_id)
+                .values(consecutive_failures=failures, last_error=error_str)
+            )
+            await session.commit()
+
+        logger.exception("Job %s failed (consecutive #%d)", task_id, failures)
+
+        if task.user_telegram_id and (failures == 1 or failures % 5 == 0):
+            await _notify_owner(
+                task.user_telegram_id,
+                f"⚠️ <b>Schedule #{task_id} failed</b> (×{failures})\n"
+                f"→ <code>{task.target_username}</code>\n\n"
+                f"<i>{error_str[:200]}</i>",
+            )
+
+
+async def fire_task_now(task_id: int) -> str:
+    """Generate and immediately send the message for a task. Returns the sent text."""
+    async with async_session_factory() as session:
+        task = await session.get(ScheduledTask, task_id)
+        if task is None or not task.is_active:
+            raise ValueError(f"Task #{task_id} not found or inactive")
+
+    recipient_info = await get_recipient_info(task.target_username)
+    text = await generate_message(task.target_username, task.topic, task.language, recipient_info)
+
+    if _bot is None:
+        raise RuntimeError("Bot instance not set — call set_bot() on startup")
+    await _bot.send_message(chat_id=task.target_username, text=text)
+
+    async with async_session_factory() as session:
+        await session.execute(
+            update(ScheduledTask)
+            .where(ScheduledTask.id == task_id)
+            .values(last_sent_at=datetime.now(tz=UTC), consecutive_failures=0, last_error=None)
+        )
+        await session.commit()
+
+    logger.info("Manual fire for task %d → %s", task_id, task.target_username)
+    return text
 
 
 def _add_apscheduler_job(task: ScheduledTask) -> None:

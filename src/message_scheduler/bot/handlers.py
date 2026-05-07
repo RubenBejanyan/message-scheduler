@@ -8,11 +8,11 @@ from aiogram.types import CallbackQuery, Message
 from ..config import settings
 from ..scheduler import (
     cancel_task,
-    count_active_tasks_per_user,
     create_task,
     get_next_run_time,
     list_active_tasks,
     list_all_active_tasks,
+    list_tasks_by_users,
     parse_interval,
 )
 from ..users import (
@@ -127,16 +127,33 @@ async def cmd_users(message: Message) -> None:
         await message.answer("No registered users yet.")
         return
 
-    task_counts = await count_active_tasks_per_user()
+    all_ids = [u.telegram_id for u in active + blocked]
+    user_tasks = await list_tasks_by_users(all_ids)
+
+    def _schedule_lines(telegram_id: int) -> str:
+        tasks = user_tasks.get(telegram_id, [])
+        if not tasks:
+            return "  🗓 No active schedules"
+        lines = [f"  🗓 {len(tasks)} active schedule(s):"]
+        for t in tasks:
+            last = t.last_sent_at.strftime("%m-%d %H:%M") if t.last_sent_at else "never"
+            nrt = get_next_run_time(t.job_id)
+            next_run = nrt.strftime("%m-%d %H:%M") if nrt else "—"
+            lines.append(
+                f"    • #{t.id} → <code>{t.target_username}</code> | {t.interval_label}"
+                f" | {t.language}\n"
+                f"      topic: <i>{t.topic}</i>\n"
+                f"      last: {last} · next: {next_run}"
+            )
+        return "\n".join(lines)
 
     if active:
         await message.answer(f"<b>Active users ({len(active)})</b>", parse_mode="HTML")
         for u in active:
             display = f"@{u.username}" if u.username else u.first_name
-            n_tasks = task_counts.get(u.telegram_id, 0)
-            sched = f"🗓 {n_tasks} active schedule(s)" if n_tasks else "🗓 No active schedules"
             await message.answer(
-                f"• {u.first_name} {display} — <code>{u.telegram_id}</code>\n  {sched}",
+                f"• {u.first_name} {display} — <code>{u.telegram_id}</code>\n"
+                f"{_schedule_lines(u.telegram_id)}",
                 reply_markup=block_keyboard(u.telegram_id),
                 parse_mode="HTML",
             )
@@ -145,10 +162,9 @@ async def cmd_users(message: Message) -> None:
         await message.answer(f"<b>Blocked users ({len(blocked)})</b>", parse_mode="HTML")
         for u in blocked:
             display = f"@{u.username}" if u.username else u.first_name
-            n_tasks = task_counts.get(u.telegram_id, 0)
-            sched = f"🗓 {n_tasks} active schedule(s)" if n_tasks else "🗓 No active schedules"
             await message.answer(
-                f"• {u.first_name} {display} — <code>{u.telegram_id}</code>\n  {sched}",
+                f"• {u.first_name} {display} — <code>{u.telegram_id}</code>\n"
+                f"{_schedule_lines(u.telegram_id)}",
                 reply_markup=unblock_keyboard(u.telegram_id),
                 parse_mode="HTML",
             )

@@ -207,6 +207,26 @@ async def count_active_tasks_per_user() -> dict[int, int]:
         return {row.user_telegram_id: row.cnt for row in rows}
 
 
+async def list_tasks_by_users(telegram_ids: list[int]) -> dict[int, list[ScheduledTask]]:
+    """Return {telegram_id: [active tasks]} for a batch of users in one query."""
+    if not telegram_ids:
+        return {}
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(ScheduledTask)
+            .where(
+                ScheduledTask.is_active == True,  # noqa: E712
+                ScheduledTask.user_telegram_id.in_(telegram_ids),
+            )
+            .order_by(ScheduledTask.user_telegram_id, ScheduledTask.created_at)
+        )
+        tasks = result.scalars().all()
+    grouped: dict[int, list[ScheduledTask]] = {tid: [] for tid in telegram_ids}
+    for task in tasks:
+        grouped[task.user_telegram_id].append(task)
+    return grouped
+
+
 def get_next_run_time(job_id: str) -> datetime | None:
     """Return APScheduler's next_run_time for the given job, or None if not found."""
     job = scheduler.get_job(job_id)

@@ -9,7 +9,7 @@ from sqlalchemy import func, select, update
 
 from .ai_generator import generate_message
 from .database import async_session_factory
-from .models import ScheduledTask
+from .models import ScheduledTask, SentMessage
 from .telegram_client import get_recipient_info
 
 logger = logging.getLogger(__name__)
@@ -22,6 +22,19 @@ _bot: Bot | None = None
 def set_bot(bot: Bot) -> None:
     global _bot
     _bot = bot
+
+
+async def _record_sent(task: ScheduledTask, text: str) -> None:
+    async with async_session_factory() as session:
+        session.add(
+            SentMessage(
+                task_id=task.id,
+                user_telegram_id=task.user_telegram_id,
+                target_username=task.target_username,
+                content=text,
+            )
+        )
+        await session.commit()
 
 
 async def _notify_owner(uid: int, text: str) -> None:
@@ -63,6 +76,7 @@ async def _execute_job(task_id: int) -> None:
             )
             await session.commit()
 
+        await _record_sent(task, text)
         logger.info("Job %s: sent to %s", task.job_id, task.target_username)
 
         if prev_failures > 0 and task.user_telegram_id:
@@ -118,6 +132,7 @@ async def fire_task_now(task_id: int) -> str:
         )
         await session.commit()
 
+    await _record_sent(task, text)
     logger.info("Manual fire for task %d → %s", task_id, task.target_username)
     return text
 
@@ -290,6 +305,74 @@ async def count_user_tasks(user_telegram_id: int) -> int:
             )
         )
         return result.scalar() or 0
+
+
+async def update_task_topic(
+    task_id: int, user_telegram_id: int, topic: str, force: bool = False
+) -> bool:
+    async with async_session_factory() as session:
+        task = await session.get(ScheduledTask, task_id)
+        if task is None or not task.is_active:
+            return False
+        if not force and task.user_telegram_id != user_telegram_id:
+            return False
+        task.topic = topic
+        await session.commit()
+    return True
+
+
+async def update_task_language(
+    task_id: int, user_telegram_id: int, language: str, force: bool = False
+) -> bool:
+    async with async_session_factory() as session:
+        task = await session.get(ScheduledTask, task_id)
+        if task is None or not task.is_active:
+            return False
+        if not force and task.user_telegram_id != user_telegram_id:
+            return False
+        task.language = language
+        await session.commit()
+    return True
+
+
+async def update_task_interval(
+    task_id: int,
+    user_telegram_id: int,
+    interval_type: str,
+    interval_value: str,
+    interval_label: str,
+    force: bool = False,
+) -> bool:
+    async with async_session_factory() as session:
+        task = await session.get(ScheduledTask, task_id)
+        if task is None or not task.is_active:
+            return False
+        if not force and task.user_telegram_id != user_telegram_id:
+            return False
+        task.interval_type = interval_type
+        task.interval_value = interval_value
+        task.interval_label = interval_label
+        await session.commit()
+
+    # Re-register job with new schedule if currently active
+    async with async_session_factory() as session:
+        refreshed = await session.get(ScheduledTask, task_id)
+        if refreshed and not refreshed.is_paused:
+            _add_apscheduler_job(refreshed)  # replace_existing=True handles update
+
+    return True
+
+
+async def get_task_history(task_id: int, limit: int = 5) -> list[SentMessage]:
+    """Return the most recent sent messages for a task, newest first."""
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(SentMessage)
+            .where(SentMessage.task_id == task_id)
+            .order_by(SentMessage.sent_at.desc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
 
 
 async def list_active_tasks(user_telegram_id: int) -> list[ScheduledTask]:

@@ -12,12 +12,16 @@ from ..scheduler import (
     create_task,
     fire_task_now,
     get_next_run_time,
+    get_task_history,
     list_active_tasks,
     list_all_active_tasks,
     list_tasks_by_users,
     parse_interval,
     pause_task,
     resume_task,
+    update_task_interval,
+    update_task_language,
+    update_task_topic,
 )
 from ..users import (
     block_user,
@@ -30,12 +34,14 @@ from ..users import (
 from .keyboards import (
     block_keyboard,
     confirm_keyboard,
+    edit_field_keyboard,
+    edit_language_keyboard,
     language_keyboard,
     randomization_keyboard,
     task_keyboard,
     unblock_keyboard,
 )
-from .states import ScheduleForm
+from .states import EditForm, ScheduleForm
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -602,3 +608,149 @@ async def send_now_callback(callback: CallbackQuery) -> None:
         await callback.message.answer(  # type: ignore[union-attr]
             f"❌ <b>Send failed:</b> <i>{exc}</i>", parse_mode="HTML"
         )
+
+
+# ── History & Edit ────────────────────────────────────────────────────────────
+
+
+@router.callback_query(F.data.startswith("history:"))
+async def cb_history(callback: CallbackQuery) -> None:
+    task_id = int(callback.data.split(":")[1])  # type: ignore[union-attr]
+    entries = await get_task_history(task_id, limit=5)
+    if not entries:
+        await callback.answer("No history yet.", show_alert=True)
+        return
+    lines = [f"📋 <b>Last {len(entries)} messages for Schedule #{task_id}:</b>"]
+    for e in entries:
+        sent = e.sent_at.strftime("%m-%d %H:%M UTC")
+        lines.append(f"\n<i>{sent}</i>\n{e.content}")
+    await callback.message.answer("\n".join(lines), parse_mode="HTML")  # type: ignore[union-attr]
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("edit_task:"))
+async def cb_edit_task(callback: CallbackQuery) -> None:
+    task_id = int(callback.data.split(":")[1])  # type: ignore[union-attr]
+    await callback.message.answer(  # type: ignore[union-attr]
+        f"✏️ <b>Edit Schedule #{task_id}</b>\n\nWhat would you like to change?",
+        reply_markup=edit_field_keyboard(task_id),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("edit_topic:"))
+async def cb_edit_topic(callback: CallbackQuery, state: FSMContext) -> None:
+    task_id = int(callback.data.split(":")[1])  # type: ignore[union-attr]
+    await state.update_data(edit_task_id=task_id)
+    await state.set_state(EditForm.waiting_for_topic)
+    await callback.message.edit_reply_markup()  # type: ignore[union-attr]
+    await callback.message.answer("📝 Enter the new topic for this schedule:")  # type: ignore[union-attr]
+    await callback.answer()
+
+
+@router.message(EditForm.waiting_for_topic)
+async def process_edit_topic(message: Message, state: FSMContext) -> None:
+    if message.from_user is None or not await _is_approved(message.from_user.id):
+        return
+    topic = (message.text or "").strip()
+    if len(topic) < 3:
+        await message.answer("Please provide a more descriptive topic.")
+        return
+    data = await state.get_data()
+    task_id: int = data["edit_task_id"]
+    uid = message.from_user.id
+    ok = await update_task_topic(task_id, uid, topic, force=uid == settings.telegram_admin_id)
+    await state.clear()
+    if ok:
+        await message.answer(f"✅ Topic updated for Schedule #{task_id}.")
+    else:
+        await message.answer(f"❌ Could not update Schedule #{task_id}.")
+
+
+@router.callback_query(F.data.startswith("edit_lang:"))
+async def cb_edit_lang(callback: CallbackQuery) -> None:
+    task_id = int(callback.data.split(":")[1])  # type: ignore[union-attr]
+    await callback.message.edit_reply_markup()  # type: ignore[union-attr]
+    await callback.message.answer(  # type: ignore[union-attr]
+        "🌐 Choose the new language:",
+        reply_markup=edit_language_keyboard(task_id),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("edit_lang_val:"))
+async def cb_edit_lang_val(callback: CallbackQuery) -> None:
+    if callback.from_user is None:
+        return
+    parts = (callback.data or "").split(":")
+
+    task_id = int(parts[1])
+    language = parts[2]
+    uid = callback.from_user.id
+    ok = await update_task_language(task_id, uid, language, force=uid == settings.telegram_admin_id)
+    await callback.message.edit_reply_markup()  # type: ignore[union-attr]
+    if ok:
+        await callback.message.answer(  # type: ignore[union-attr]
+            f"✅ Language updated to <b>{language}</b> for Schedule #{task_id}.", parse_mode="HTML"
+        )
+    else:
+        await callback.message.answer(f"❌ Could not update Schedule #{task_id}.")  # type: ignore[union-attr]
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("edit_freq:"))
+async def cb_edit_freq(callback: CallbackQuery, state: FSMContext) -> None:
+    task_id = int(callback.data.split(":")[1])  # type: ignore[union-attr]
+    await state.update_data(edit_task_id=task_id)
+    await state.set_state(EditForm.waiting_for_interval)
+    await callback.message.edit_reply_markup()  # type: ignore[union-attr]
+    await callback.message.answer(  # type: ignore[union-attr]
+        "⏱ Enter the new frequency:\n\n"
+        "• <code>30m</code> — every 30 minutes\n"
+        "• <code>2h</code> — every 2 hours\n"
+        "• <code>1d</code> — every day\n"
+        "• <code>daily 09:00</code> — every day at 09:00 UTC\n"
+        "• <code>window 15:15-15:50</code> — daily at a random time in that range",
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.message(EditForm.waiting_for_interval)
+async def process_edit_interval(message: Message, state: FSMContext) -> None:
+    if message.from_user is None or not await _is_approved(message.from_user.id):
+        return
+    text = (message.text or "").strip()
+    parsed = parse_interval(text)
+    if parsed is None:
+        await message.answer(
+            "Could not parse that. Try: <code>30m</code>, <code>2h</code>, "
+            "<code>daily 09:00</code>, or <code>window 15:00-15:45</code>",
+            parse_mode="HTML",
+        )
+        return
+    interval_type, interval_value, interval_label = parsed
+    if interval_type == "interval":
+        min_seconds = settings.min_interval_minutes * 60
+        if int(interval_value) < min_seconds:
+            await message.answer(
+                f"Minimum interval is {settings.min_interval_minutes} minutes. Please try again."
+            )
+            return
+    data = await state.get_data()
+    task_id: int = data["edit_task_id"]
+    uid = message.from_user.id
+    ok = await update_task_interval(
+        task_id, uid, interval_type, interval_value, interval_label,
+        force=uid == settings.telegram_admin_id,
+    )
+    await state.clear()
+    if ok:
+        await message.answer(
+            f"✅ Frequency updated to <b>{interval_label}</b> for Schedule #{task_id}.",
+            parse_mode="HTML",
+        )
+    else:
+        await message.answer(f"❌ Could not update Schedule #{task_id}.")

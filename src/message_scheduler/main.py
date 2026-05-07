@@ -8,6 +8,7 @@ Run with:
 import asyncio
 import logging
 import sys
+import time
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -17,7 +18,6 @@ from aiogram.types import BotCommand
 
 from .bot.handlers import router
 from .config import settings
-from .database import init_db, run_migrations
 from .scheduler import reload_jobs_from_db, scheduler, set_bot
 from .telegram_client import start_client, stop_client
 
@@ -29,27 +29,29 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-async def _init_db_with_retry(attempts: int = 5, delay: float = 4.0) -> None:
+def _run_migrations(attempts: int = 5, delay: float = 4.0) -> None:
+    """Run Alembic migrations synchronously before the async app starts."""
+    from alembic.config import Config
+
+    from alembic import command
+
+    cfg = Config("alembic.ini")
     for attempt in range(1, attempts + 1):
         try:
-            await init_db()
+            command.upgrade(cfg, "head")
             return
         except Exception as exc:
             if attempt == attempts:
                 raise
             logger.warning(
-                "DB connect attempt %d/%d failed (%s) — retrying in %.0fs…",
+                "Migration attempt %d/%d failed (%s) — retrying in %.0fs…",
                 attempt, attempts, exc, delay,
             )
-            await asyncio.sleep(delay)
+            time.sleep(delay)
 
 
 async def main() -> None:
     logger.info("Starting Message Scheduler…")
-
-    logger.info("Initialising database…")
-    await _init_db_with_retry()
-    await run_migrations()
 
     logger.info("Connecting Telethon user client…")
     try:
@@ -97,6 +99,9 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    logger.info("Running database migrations…")
+    _run_migrations()
+
     # ProactorEventLoop (Windows default) maps TCP resets to WinError 64 / WinError 10054.
     # SelectorEventLoop raises clean ConnectionResetError instead.
     # loop_factory is the non-deprecated replacement for set_event_loop_policy (removed in 3.16).

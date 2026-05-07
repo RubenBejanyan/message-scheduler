@@ -8,3 +8,9 @@ class ScheduleForm(StatesGroup):
     waiting_for_language = State()
     waiting_for_topic = State()
     waiting_for_confirm = State()
+
+
+class EditForm(StatesGroup):
+    waiting_for_topic = State()
+    waiting_for_language = State()
+    waiting_for_interval = State()

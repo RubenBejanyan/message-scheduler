@@ -35,8 +35,28 @@ def task_keyboard(task_id: int, is_paused: bool) -> InlineKeyboardMarkup:
         builder.button(text="▶ Resume", callback_data=f"resume_task:{task_id}")
     else:
         builder.button(text="⏸ Pause", callback_data=f"pause_task:{task_id}")
+    builder.button(text="✏️ Edit", callback_data=f"edit_task:{task_id}")
+    builder.button(text="📋 History", callback_data=f"history:{task_id}")
     builder.button(text="🗑 Cancel this task", callback_data=f"cancel_task:{task_id}")
-    builder.adjust(1)
+    builder.adjust(2, 2, 1)
+    return builder.as_markup()
+
+
+def edit_field_keyboard(task_id: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📝 Topic", callback_data=f"edit_topic:{task_id}")
+    builder.button(text="🌐 Language", callback_data=f"edit_lang:{task_id}")
+    builder.button(text="⏱ Frequency", callback_data=f"edit_freq:{task_id}")
+    builder.adjust(3)
+    return builder.as_markup()
+
+
+def edit_language_keyboard(task_id: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for label, data in LANGUAGE_OPTIONS:
+        lang = data.split(":")[1]
+        builder.button(text=label, callback_data=f"edit_lang_val:{task_id}:{lang}")
+    builder.adjust(2)
     return builder.as_markup()
 
 

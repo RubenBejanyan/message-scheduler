@@ -12,7 +12,7 @@ import sys
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.types import BotCommand
 
 from .bot.handlers import router
@@ -78,7 +78,7 @@ async def main() -> None:
         BotCommand(command="cancel", description="Cancel a schedule"),
         BotCommand(command="help", description="Help & all commands"),
     ])
-    dp = Dispatcher(storage=MemoryStorage())
+    dp = Dispatcher(storage=RedisStorage.from_url(settings.redis_url))
     dp.include_router(router)
 
     try:

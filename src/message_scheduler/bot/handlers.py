@@ -8,6 +8,7 @@ from aiogram.types import CallbackQuery, Message
 from ..config import settings
 from ..scheduler import (
     cancel_task,
+    count_user_tasks,
     create_task,
     fire_task_now,
     get_next_run_time,
@@ -15,6 +16,8 @@ from ..scheduler import (
     list_all_active_tasks,
     list_tasks_by_users,
     parse_interval,
+    pause_task,
+    resume_task,
 )
 from ..users import (
     block_user,
@@ -26,10 +29,10 @@ from ..users import (
 )
 from .keyboards import (
     block_keyboard,
-    cancel_task_keyboard,
     confirm_keyboard,
     language_keyboard,
     randomization_keyboard,
+    task_keyboard,
     unblock_keyboard,
 )
 from .states import ScheduleForm
@@ -397,6 +400,19 @@ async def process_topic(message: Message, state: FSMContext) -> None:
 async def confirm_yes(callback: CallbackQuery, state: FSMContext) -> None:
     if callback.from_user is None:
         return
+
+    uid = callback.from_user.id
+    is_admin = uid == settings.telegram_admin_id
+    if not is_admin:
+        n = await count_user_tasks(uid)
+        if n >= settings.max_schedules_per_user:
+            await callback.message.answer(  # type: ignore[union-attr]
+                f"❌ You've reached the limit of {settings.max_schedules_per_user} active "
+                "schedules. Cancel or delete one before creating a new one."
+            )
+            await callback.answer()
+            return
+
     data = await state.get_data()
     await state.clear()
     await callback.message.edit_reply_markup()  # type: ignore[union-attr]
@@ -410,7 +426,7 @@ async def confirm_yes(callback: CallbackQuery, state: FSMContext) -> None:
 
     try:
         task = await create_task(
-            user_telegram_id=callback.from_user.id,
+            user_telegram_id=uid,
             target_username=data["target"],
             topic=data["topic"],
             interval_type=data["interval_type"],
@@ -461,7 +477,11 @@ async def cmd_list(message: Message) -> None:
     for task in tasks:
         last = task.last_sent_at.strftime("%Y-%m-%d %H:%M UTC") if task.last_sent_at else "never"
         nrt = get_next_run_time(task.job_id)
-        next_run = nrt.strftime("%Y-%m-%d %H:%M UTC") if nrt else "—"
+        next_run = "— (paused)" if task.is_paused else (
+            nrt.strftime("%Y-%m-%d %H:%M UTC") if nrt else "—"
+        )
+        header = "⏸" if task.is_paused else "🗓"
+        paused_suffix = " <i>(paused)</i>" if task.is_paused else ""
         owner_line = (
             f"• Owner: <code>{task.user_telegram_id or 'unknown (legacy)'}</code>\n"
             if is_admin
@@ -473,7 +493,7 @@ async def cmd_list(message: Message) -> None:
             else ""
         )
         text = (
-            f"🗓 <b>Schedule #{task.id}</b>\n"
+            f"{header} <b>Schedule #{task.id}</b>{paused_suffix}\n"
             f"{owner_line}"
             f"• To: <code>{task.target_username}</code>\n"
             f"• Frequency: {task.interval_label}\n"
@@ -484,7 +504,7 @@ async def cmd_list(message: Message) -> None:
             f"{failure_line}"
         )
         await message.answer(
-            text.rstrip(), reply_markup=cancel_task_keyboard(task.id), parse_mode="HTML"
+            text.rstrip(), reply_markup=task_keyboard(task.id, task.is_paused), parse_mode="HTML"
         )
 
 
@@ -513,6 +533,46 @@ async def cancel_task_callback(callback: CallbackQuery) -> None:
         await callback.message.answer(f"🗑 Schedule #{task_id} cancelled.")  # type: ignore[union-attr]
     else:
         await callback.message.answer(f"Schedule #{task_id} not found.")  # type: ignore[union-attr]
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("pause_task:"))
+async def pause_task_callback(callback: CallbackQuery) -> None:
+    if callback.from_user is None:
+        return
+    task_id = int(callback.data.split(":")[1])  # type: ignore[union-attr]
+    uid = callback.from_user.id
+    is_admin = uid == settings.telegram_admin_id
+    success = await pause_task(task_id, uid, force=is_admin)
+    await callback.message.edit_reply_markup()  # type: ignore[union-attr]
+    if success:
+        await callback.message.answer(  # type: ignore[union-attr]
+            f"⏸ Schedule #{task_id} paused. Use /list to resume it."
+        )
+    else:
+        await callback.message.answer(  # type: ignore[union-attr]
+            f"Schedule #{task_id} not found or already paused."
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("resume_task:"))
+async def resume_task_callback(callback: CallbackQuery) -> None:
+    if callback.from_user is None:
+        return
+    task_id = int(callback.data.split(":")[1])  # type: ignore[union-attr]
+    uid = callback.from_user.id
+    is_admin = uid == settings.telegram_admin_id
+    success = await resume_task(task_id, uid, force=is_admin)
+    await callback.message.edit_reply_markup()  # type: ignore[union-attr]
+    if success:
+        await callback.message.answer(  # type: ignore[union-attr]
+            f"▶ Schedule #{task_id} resumed."
+        )
+    else:
+        await callback.message.answer(  # type: ignore[union-attr]
+            f"Schedule #{task_id} not found or not paused."
+        )
     await callback.answer()
 
 

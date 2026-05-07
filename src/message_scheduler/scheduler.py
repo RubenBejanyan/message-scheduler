@@ -37,7 +37,7 @@ async def _execute_job(task_id: int) -> None:
     """Called by APScheduler for each scheduled message."""
     async with async_session_factory() as session:
         task = await session.get(ScheduledTask, task_id)
-        if task is None or not task.is_active:
+        if task is None or not task.is_active or task.is_paused:
             return
     # task attributes remain accessible (expire_on_commit=False)
 
@@ -169,10 +169,13 @@ def _add_apscheduler_job(task: ScheduledTask) -> None:
 
 
 async def reload_jobs_from_db() -> None:
-    """On startup, restore all active jobs from the database."""
+    """On startup, restore all active non-paused jobs from the database."""
     async with async_session_factory() as session:
         result = await session.execute(
-            select(ScheduledTask).where(ScheduledTask.is_active == True)  # noqa: E712
+            select(ScheduledTask).where(
+                ScheduledTask.is_active == True,  # noqa: E712
+                ScheduledTask.is_paused == False,  # noqa: E712
+            )
         )
         tasks = result.scalars().all()
 
@@ -238,6 +241,55 @@ async def cancel_task(task_id: int, user_telegram_id: int, force: bool = False) 
         scheduler.remove_job(job_id)
 
     return True
+
+
+async def pause_task(task_id: int, user_telegram_id: int, force: bool = False) -> bool:
+    """Pause a task: keeps it in DB but removes it from APScheduler."""
+    async with async_session_factory() as session:
+        task = await session.get(ScheduledTask, task_id)
+        if task is None or not task.is_active or task.is_paused:
+            return False
+        if not force and task.user_telegram_id != user_telegram_id:
+            return False
+        task.is_paused = True
+        await session.commit()
+        job_id = task.job_id
+
+    if scheduler.get_job(job_id):
+        scheduler.remove_job(job_id)
+    return True
+
+
+async def resume_task(task_id: int, user_telegram_id: int, force: bool = False) -> bool:
+    """Resume a paused task: re-registers it with APScheduler."""
+    async with async_session_factory() as session:
+        task = await session.get(ScheduledTask, task_id)
+        if task is None or not task.is_active or not task.is_paused:
+            return False
+        if not force and task.user_telegram_id != user_telegram_id:
+            return False
+        task.is_paused = False
+        await session.commit()
+
+    async with async_session_factory() as session:
+        task = await session.get(ScheduledTask, task_id)
+        if task is None:
+            return False
+
+    _add_apscheduler_job(task)
+    return True
+
+
+async def count_user_tasks(user_telegram_id: int) -> int:
+    """Count non-cancelled schedules for a user (active + paused)."""
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(func.count()).select_from(ScheduledTask).where(
+                ScheduledTask.user_telegram_id == user_telegram_id,
+                ScheduledTask.is_active == True,  # noqa: E712
+            )
+        )
+        return result.scalar() or 0
 
 
 async def list_active_tasks(user_telegram_id: int) -> list[ScheduledTask]:

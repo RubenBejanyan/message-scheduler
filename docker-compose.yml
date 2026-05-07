@@ -6,8 +6,8 @@ services:
     env_file:
       - .env
     environment:
-      # Uses the Docker service name "postgres" reachable via infra_net
       DATABASE_URL: postgresql+asyncpg://user:password@postgres:5432/dev_db
+      REDIS_URL: redis://global_redis:6379/0
       TELETHON_SESSION_PATH: /app/user_session
     volumes:
       - ./user_session.session:/app/user_session.session

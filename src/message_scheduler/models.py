@@ -48,6 +48,8 @@ class ScheduledTask(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     job_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
 
+    is_paused: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
     consecutive_failures: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )

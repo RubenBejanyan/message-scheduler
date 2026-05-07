@@ -46,6 +46,8 @@ async def run_migrations() -> None:
         "ALTER TABLE scheduled_tasks ADD COLUMN IF NOT EXISTS "
         "consecutive_failures INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE scheduled_tasks ADD COLUMN IF NOT EXISTS last_error TEXT",
+        "ALTER TABLE scheduled_tasks ADD COLUMN IF NOT EXISTS "
+        "is_paused BOOLEAN NOT NULL DEFAULT FALSE",
     ]
     async with engine.begin() as conn:
         for stmt in stmts:

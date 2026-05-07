@@ -27,8 +27,12 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "postgresql+asyncpg://user:password@localhost:5432/dev_db"
 
+    # Redis (FSM storage)
+    redis_url: str = "redis://127.0.0.1:6379/0"
+
     # App
     min_interval_minutes: int = 5
+    max_schedules_per_user: int = 10
 
 
 settings = Settings()  # type: ignore[call-arg]

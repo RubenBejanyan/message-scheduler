@@ -1,7 +1,7 @@
 import logging
+from pathlib import Path
 
 from telethon import TelegramClient
-from telethon.errors import FloodWaitError, UserPrivacyRestrictedError
 from telethon.tl.functions.users import GetFullUserRequest
 from telethon.tl.types import User
 
@@ -10,6 +10,7 @@ from .config import settings
 logger = logging.getLogger(__name__)
 
 _client: TelegramClient | None = None
+_available: bool = False  # True only after a successful start_client()
 
 
 def get_telegram_client() -> TelegramClient:
@@ -27,11 +28,24 @@ def get_telegram_client() -> TelegramClient:
 
 
 async def start_client() -> None:
+    """Connect Telethon. Skips silently if no session file exists."""
+    global _available
+    session_file = Path(str(settings.telethon_session_path) + ".session")
+    if not session_file.exists():
+        logger.warning(
+            "Telethon session file not found (%s). "
+            "Recipient info enrichment disabled. "
+            "Run 'uv run python setup_session.py' to enable it.",
+            session_file,
+        )
+        return
+
     client = get_telegram_client()
     if not client.is_connected():
         await client.start()
         me = await client.get_me()
         logger.info("Telethon connected as: %s (@%s)", me.first_name, me.username)
+    _available = True
 
 
 async def stop_client() -> None:
@@ -40,7 +54,9 @@ async def stop_client() -> None:
 
 
 async def get_recipient_info(target: str) -> dict[str, str]:
-    """Fetch name/bio/type for a target. Returns empty dict on any error."""
+    """Fetch name/bio/type for a target. Returns empty dict if Telethon is unavailable."""
+    if not _available:
+        return {}
     client = get_telegram_client()
     try:
         entity = await client.get_entity(target)
@@ -59,20 +75,3 @@ async def get_recipient_info(target: str) -> dict[str, str]:
     except Exception:
         logger.warning("Could not fetch recipient info for %s", target)
         return {}
-
-
-async def send_message_as_user(target_username: str, text: str) -> None:
-    """Send a Telegram message FROM the authenticated owner account."""
-    client = get_telegram_client()
-    try:
-        await client.send_message(target_username, text)
-        logger.info("Sent message to %s", target_username)
-    except FloodWaitError as e:
-        logger.warning("FloodWait: must wait %d seconds before sending again", e.seconds)
-        raise
-    except UserPrivacyRestrictedError:
-        logger.error("Cannot send to %s — their privacy settings block messages", target_username)
-        raise
-    except Exception:
-        logger.exception("Failed to send message to %s", target_username)
-        raise

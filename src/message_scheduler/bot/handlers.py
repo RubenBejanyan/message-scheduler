@@ -58,6 +58,13 @@ _JITTER_LABELS: dict[int, str] = {
     7200: "±2 hours",
 }
 
+
+def _jitter_label(seconds: int) -> str:
+    if seconds in _JITTER_LABELS:
+        return _JITTER_LABELS[seconds]
+    minutes = seconds // 60
+    return f"±{minutes} min" if minutes else f"±{seconds}s"
+
 _BOT_SEND_NOTICE = (
     "\n\n<i>ℹ️ Messages are sent from the bot account. "
     "Recipients must have previously started a conversation with this bot, "
@@ -464,7 +471,7 @@ async def process_messages(message: Message, state: FSMContext) -> None:
 
     jitter = data.get("jitter_seconds")
     jitter_line = (
-        f"• Randomization: {_JITTER_LABELS.get(jitter, f'+{jitter}s')}\n" if jitter else ""
+        f"• Randomization: {_jitter_label(jitter)}\n" if jitter else ""
     )
     preview = msgs[0][:120] + ("…" if len(msgs[0]) > 120 else "")
     count_line = f" ({len(msgs)} messages, random pick)" if len(msgs) > 1 else ""
@@ -517,7 +524,7 @@ async def process_topic(message: Message, state: FSMContext) -> None:
 
     jitter = data.get("jitter_seconds")
     jitter_line = (
-        f"• Randomization: {_JITTER_LABELS.get(jitter, f'+{jitter}s')}\n" if jitter else ""
+        f"• Randomization: {_jitter_label(jitter)}\n" if jitter else ""
     )
 
     await message.answer(
@@ -556,7 +563,7 @@ async def confirm_yes(callback: CallbackQuery, state: FSMContext) -> None:
     jitter: int | None = data.get("jitter_seconds")
     interval_label = data["interval_label"]
     if jitter:
-        interval_label += f" ({_JITTER_LABELS.get(jitter, f'+{jitter}s')} randomization)"
+        interval_label += f" ({_jitter_label(jitter)} randomization)"
 
     mode: str = data.get("message_mode", "ai")
     messages_json: str | None = None

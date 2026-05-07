@@ -57,12 +57,9 @@ async def main() -> None:
     try:
         await start_client()
     except Exception as exc:
-        logger.error(
-            "Telethon failed to start: %s\n"
-            "Run 'uv run python setup_session.py' first to authenticate your account.",
-            exc,
+        logger.warning(
+            "Telethon failed to connect (%s). Recipient info enrichment will be disabled.", exc
         )
-        return
 
     logger.info("Starting APScheduler…")
     scheduler.start()

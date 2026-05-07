@@ -28,6 +28,8 @@ class ScheduledTask(Base):
 
     __tablename__ = "scheduled_tasks"
 
+    __table_args__ = (Index("ix_scheduled_tasks_user_telegram_id", "user_telegram_id"),)
+
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_telegram_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     target_username: Mapped[str] = mapped_column(String(100), nullable=False)

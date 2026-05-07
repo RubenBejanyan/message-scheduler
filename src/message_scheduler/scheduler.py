@@ -433,18 +433,6 @@ async def list_all_active_tasks() -> list[ScheduledTask]:
         return list(result.scalars().all())
 
 
-async def count_active_tasks_per_user() -> dict[int, int]:
-    """Return {user_telegram_id: active_task_count} for all users with active tasks."""
-    async with async_session_factory() as session:
-        rows = await session.execute(
-            select(ScheduledTask.user_telegram_id, func.count().label("cnt"))
-            .where(ScheduledTask.is_active == True)  # noqa: E712
-            .where(ScheduledTask.user_telegram_id.is_not(None))
-            .group_by(ScheduledTask.user_telegram_id)
-        )
-        return {row.user_telegram_id: row.cnt for row in rows}
-
-
 async def list_tasks_by_users(telegram_ids: list[int]) -> dict[int, list[ScheduledTask]]:
     """Return {telegram_id: [active tasks]} for a batch of users in one query."""
     if not telegram_ids:

@@ -2,7 +2,7 @@
 name = "message-scheduler"
 version = "0.1.0"
 description = "AI-powered Telegram message scheduler — sends messages from your user account"
-requires-python = ">=3.12"
+requires-python = ">=3.14"
 dependencies = [
     "aiogram>=3.16",
     "telethon>=1.39",
@@ -11,7 +11,6 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0",
     "asyncpg>=0.30",
     "pydantic-settings>=2.9",
-    "python-dotenv>=1.1",
     "redis[asyncio]>=7.4.0",
     "alembic>=1.18.4",
 ]
@@ -25,7 +24,7 @@ packages = ["src/message_scheduler"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py314"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
@@ -37,6 +36,6 @@ dev = [
 ]
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.14"
 strict = true
 ignore_missing_imports = true

@@ -38,19 +38,4 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-  deploy:
-    needs: build-and-push
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Deploy to server
-        uses: appleboy/ssh-action@v1
-        with:
-          host: 178.105.92.42
-          username: root
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          script: |
-            cd /opt/message_scheduler
-            docker compose pull
-            docker compose up -d --force-recreate
+          # Watchtower on the server polls ghcr.io every 60s and redeploys automatically.

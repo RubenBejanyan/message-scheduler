@@ -8,6 +8,14 @@ services:
     networks:
       - infra_net
 
+  watchtower:
+    image: containrrr/watchtower
+    container_name: watchtower
+    restart: always
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: --interval 60 message_scheduler
+
 networks:
   infra_net:
     external: true

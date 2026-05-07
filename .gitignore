@@ -1,5 +1,4 @@
 .env
-!.env.example
 *.session
 *.session-journal
 __pycache__/
@@ -8,3 +7,4 @@ __pycache__/
 dist/
 .mypy_cache/
 .ruff_cache/
+.claude/

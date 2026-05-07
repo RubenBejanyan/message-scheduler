@@ -1,5 +1,7 @@
 # ChronoPost
 
+**[@Message_AI_Scheduler_bot](https://t.me/Message_AI_Scheduler_bot)** — try it on Telegram
+
 A Telegram bot that schedules and delivers messages automatically — either AI-generated in your language or from your own custom text list.
 
 ## How it works

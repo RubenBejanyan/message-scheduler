@@ -64,3 +64,23 @@ async def list_blocked_users() -> list[RegisteredUser]:
             .order_by(RegisteredUser.created_at)
         )
         return list(result.scalars().all())
+
+
+async def grant_admin(telegram_id: int) -> bool:
+    async with async_session_factory() as session:
+        user = await session.get(RegisteredUser, telegram_id)
+        if user is None:
+            return False
+        user.is_admin = True
+        await session.commit()
+        return True
+
+
+async def revoke_admin(telegram_id: int) -> bool:
+    async with async_session_factory() as session:
+        user = await session.get(RegisteredUser, telegram_id)
+        if user is None:
+            return False
+        user.is_admin = False
+        await session.commit()
+        return True

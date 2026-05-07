@@ -1,4 +1,6 @@
+import json
 import logging
+import random
 import uuid
 from datetime import UTC, datetime
 from typing import cast
@@ -55,10 +57,13 @@ async def _execute_job(task_id: int) -> None:
     # task attributes remain accessible (expire_on_commit=False)
 
     try:
-        recipient_info = await get_recipient_info(task.target_username)
-        text = await generate_message(
-            task.target_username, task.topic, task.language, recipient_info
-        )
+        if task.message_mode == "exact" and task.messages_json:
+            text = str(random.choice(json.loads(task.messages_json)))
+        else:
+            recipient_info = await get_recipient_info(task.target_username)
+            text = await generate_message(
+                task.target_username, task.topic, task.language, recipient_info
+            )
         if _bot is None:
             raise RuntimeError("Bot instance not set — call set_bot() on startup")
         await _bot.send_message(chat_id=task.target_username, text=text)
@@ -117,8 +122,13 @@ async def fire_task_now(task_id: int) -> str:
         if task is None or not task.is_active:
             raise ValueError(f"Task #{task_id} not found or inactive")
 
-    recipient_info = await get_recipient_info(task.target_username)
-    text = await generate_message(task.target_username, task.topic, task.language, recipient_info)
+    if task.message_mode == "exact" and task.messages_json:
+        text = str(random.choice(json.loads(task.messages_json)))
+    else:
+        recipient_info = await get_recipient_info(task.target_username)
+        text = await generate_message(
+            task.target_username, task.topic, task.language, recipient_info
+        )
 
     if _bot is None:
         raise RuntimeError("Bot instance not set — call set_bot() on startup")
@@ -210,6 +220,8 @@ async def create_task(
     interval_label: str,
     jitter_seconds: int | None = None,
     language: str = "English",
+    message_mode: str = "ai",
+    messages_json: str | None = None,
 ) -> ScheduledTask:
     """Persist a new scheduled task and register it with APScheduler."""
     job_id = f"task_{uuid.uuid4().hex[:12]}"
@@ -223,6 +235,8 @@ async def create_task(
         interval_label=interval_label,
         jitter_seconds=jitter_seconds,
         language=language,
+        message_mode=message_mode,
+        messages_json=messages_json,
         job_id=job_id,
         is_active=True,
     )
@@ -363,6 +377,21 @@ async def update_task_interval(
     return True
 
 
+async def update_task_messages(
+    task_id: int, user_telegram_id: int, messages_json: str, force: bool = False
+) -> bool:
+    async with async_session_factory() as session:
+        task = await session.get(ScheduledTask, task_id)
+        if task is None or not task.is_active or task.message_mode != "exact":
+            return False
+        if not force and task.user_telegram_id != user_telegram_id:
+            return False
+        task.messages_json = messages_json
+        task.topic = json.loads(messages_json)[0][:100]
+        await session.commit()
+    return True
+
+
 async def get_task_history(task_id: int, limit: int = 5) -> list[SentMessage]:
     """Return the most recent sent messages for a task, newest first."""
     async with async_session_factory() as session:
@@ -373,6 +402,11 @@ async def get_task_history(task_id: int, limit: int = 5) -> list[SentMessage]:
             .limit(limit)
         )
         return list(result.scalars().all())
+
+
+async def get_task(task_id: int) -> ScheduledTask | None:
+    async with async_session_factory() as session:
+        return await session.get(ScheduledTask, task_id)
 
 
 async def list_active_tasks(user_telegram_id: int) -> list[ScheduledTask]:

@@ -1,3 +1,4 @@
+import json
 import logging
 
 from aiogram import Bot, F, Router
@@ -12,6 +13,7 @@ from ..scheduler import (
     create_task,
     fire_task_now,
     get_next_run_time,
+    get_task,
     get_task_history,
     list_active_tasks,
     list_all_active_tasks,
@@ -21,22 +23,26 @@ from ..scheduler import (
     resume_task,
     update_task_interval,
     update_task_language,
+    update_task_messages,
     update_task_topic,
 )
 from ..users import (
     block_user,
     get_user,
+    grant_admin,
     list_active_users,
     list_blocked_users,
     register_user,
+    revoke_admin,
     unblock_user,
 )
 from .keyboards import (
-    block_keyboard,
+    active_user_keyboard,
     confirm_keyboard,
     edit_field_keyboard,
     edit_language_keyboard,
     language_keyboard,
+    message_mode_keyboard,
     randomization_keyboard,
     task_keyboard,
     unblock_keyboard,
@@ -59,8 +65,16 @@ _BOT_SEND_NOTICE = (
 )
 
 
-def _is_admin(message: Message) -> bool:
-    return message.from_user is not None and message.from_user.id == settings.telegram_admin_id
+def _is_master_admin(user_id: int) -> bool:
+    return user_id == settings.telegram_admin_id
+
+
+async def _is_admin(user_id: int) -> bool:
+    """True for both the master admin and any user granted admin via /users."""
+    if user_id == settings.telegram_admin_id:
+        return True
+    user = await get_user(user_id)
+    return user is not None and user.is_admin
 
 
 async def _is_approved(user_id: int) -> bool:
@@ -127,7 +141,7 @@ async def cmd_help(message: Message) -> None:
 
 @router.message(Command("users"))
 async def cmd_users(message: Message) -> None:
-    if not _is_admin(message):
+    if message.from_user is None or not _is_master_admin(message.from_user.id):
         return
 
     active = await list_active_users()
@@ -161,10 +175,11 @@ async def cmd_users(message: Message) -> None:
         await message.answer(f"<b>Active users ({len(active)})</b>", parse_mode="HTML")
         for u in active:
             display = f"@{u.username}" if u.username else u.first_name
+            admin_badge = " 👑" if u.is_admin else ""
             await message.answer(
-                f"• {u.first_name} {display} — <code>{u.telegram_id}</code>\n"
+                f"• {u.first_name} {display}{admin_badge} — <code>{u.telegram_id}</code>\n"
                 f"{_schedule_lines(u.telegram_id)}",
-                reply_markup=block_keyboard(u.telegram_id),
+                reply_markup=active_user_keyboard(u.telegram_id, u.is_admin),
                 parse_mode="HTML",
             )
 
@@ -182,8 +197,8 @@ async def cmd_users(message: Message) -> None:
 
 @router.callback_query(F.data.startswith("block_user:"))
 async def cb_block_user(callback: CallbackQuery, bot: Bot) -> None:
-    if not callback.from_user or callback.from_user.id != settings.telegram_admin_id:
-        await callback.answer("Admin only.", show_alert=True)
+    if not callback.from_user or not _is_master_admin(callback.from_user.id):
+        await callback.answer("Master admin only.", show_alert=True)
         return
 
     target_id = int(callback.data.split(":")[1])  # type: ignore[union-attr]
@@ -202,8 +217,8 @@ async def cb_block_user(callback: CallbackQuery, bot: Bot) -> None:
 
 @router.callback_query(F.data.startswith("unblock_user:"))
 async def cb_unblock_user(callback: CallbackQuery, bot: Bot) -> None:
-    if not callback.from_user or callback.from_user.id != settings.telegram_admin_id:
-        await callback.answer("Admin only.", show_alert=True)
+    if not callback.from_user or not _is_master_admin(callback.from_user.id):
+        await callback.answer("Master admin only.", show_alert=True)
         return
 
     target_id = int(callback.data.split(":")[1])  # type: ignore[union-attr]
@@ -217,6 +232,51 @@ async def cb_unblock_user(callback: CallbackQuery, bot: Bot) -> None:
         await bot.send_message(
             chat_id=target_id,
             text="Your access has been restored. Use /schedule to get started.",
+        )
+    except Exception:
+        pass
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("grant_admin:"))
+async def cb_grant_admin(callback: CallbackQuery, bot: Bot) -> None:
+    if not callback.from_user or not _is_master_admin(callback.from_user.id):
+        await callback.answer("Master admin only.", show_alert=True)
+        return
+    target_id = int(callback.data.split(":")[1])  # type: ignore[union-attr]
+    if _is_master_admin(target_id):
+        await callback.answer("Already master admin.", show_alert=True)
+        return
+    user = await get_user(target_id)
+    name = user.first_name if user else str(target_id)
+    await grant_admin(target_id)
+    await callback.message.edit_reply_markup()  # type: ignore[union-attr]
+    await callback.message.answer(f"👑 {name} ({target_id}) is now an admin.")  # type: ignore[union-attr]
+    try:
+        await bot.send_message(
+            chat_id=target_id,
+            text="👑 You have been granted admin permissions for this bot.",
+        )
+    except Exception:
+        pass
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("revoke_admin:"))
+async def cb_revoke_admin(callback: CallbackQuery, bot: Bot) -> None:
+    if not callback.from_user or not _is_master_admin(callback.from_user.id):
+        await callback.answer("Master admin only.", show_alert=True)
+        return
+    target_id = int(callback.data.split(":")[1])  # type: ignore[union-attr]
+    user = await get_user(target_id)
+    name = user.first_name if user else str(target_id)
+    await revoke_admin(target_id)
+    await callback.message.edit_reply_markup()  # type: ignore[union-attr]
+    await callback.message.answer(f"👑 Admin removed from {name} ({target_id}).")  # type: ignore[union-attr]
+    try:
+        await bot.send_message(
+            chat_id=target_id,
+            text="Your admin permissions have been revoked.",
         )
     except Exception:
         pass
@@ -298,10 +358,10 @@ async def process_interval(message: Message, state: FSMContext) -> None:
 
     if interval_type == "window":
         await state.update_data(jitter_seconds=None)
-        await state.set_state(ScheduleForm.waiting_for_language)
+        await state.set_state(ScheduleForm.waiting_for_mode)
         await message.answer(
-            "Step 3 — <b>Language?</b>\n\nChoose the language for the generated messages:",
-            reply_markup=language_keyboard(),
+            "Step 3 — <b>What should I send?</b>",
+            reply_markup=message_mode_keyboard(),
             parse_mode="HTML",
         )
     else:
@@ -322,10 +382,10 @@ async def process_randomization(callback: CallbackQuery, state: FSMContext) -> N
     jitter = raw if raw > 0 else None
     await state.update_data(jitter_seconds=jitter)
     await callback.message.edit_reply_markup()  # type: ignore[union-attr]
-    await state.set_state(ScheduleForm.waiting_for_language)
+    await state.set_state(ScheduleForm.waiting_for_mode)
     await callback.message.answer(  # type: ignore[union-attr]
-        "Step 4 — <b>Language?</b>\n\nChoose the language for the generated messages:",
-        reply_markup=language_keyboard(),
+        "Step 4 — <b>What should I send?</b>",
+        reply_markup=message_mode_keyboard(),
         parse_mode="HTML",
     )
     await callback.answer()
@@ -345,10 +405,79 @@ async def process_randomization_text(message: Message, state: FSMContext) -> Non
         return
     jitter: int | None = result  # type: ignore[assignment]
     await state.update_data(jitter_seconds=jitter)
-    await state.set_state(ScheduleForm.waiting_for_language)
+    await state.set_state(ScheduleForm.waiting_for_mode)
     await message.answer(
-        "Step 4 — <b>Language?</b>\n\nChoose the language for the generated messages:",
-        reply_markup=language_keyboard(),
+        "Step 4 — <b>What should I send?</b>",
+        reply_markup=message_mode_keyboard(),
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(F.data.startswith("mode:"), ScheduleForm.waiting_for_mode)
+async def process_mode(callback: CallbackQuery, state: FSMContext) -> None:
+    mode = callback.data.split(":")[1]  # type: ignore[union-attr]
+    await state.update_data(message_mode=mode)
+    await callback.message.edit_reply_markup()  # type: ignore[union-attr]
+    data = await state.get_data()
+    is_window = data.get("interval_type") == "window"
+
+    if mode == "exact":
+        await state.set_state(ScheduleForm.waiting_for_messages)
+        step = "4" if is_window else "5"
+        await callback.message.answer(  # type: ignore[union-attr]
+            f"Step {step} — <b>Enter your message(s)</b>\n\n"
+            "Type one message — or multiple messages, one per line. "
+            "Each send will pick one at random.\n\n"
+            "<i>Maximum 20 messages, 4000 characters each.</i>",
+            parse_mode="HTML",
+        )
+    else:
+        await state.set_state(ScheduleForm.waiting_for_language)
+        step = "4" if is_window else "5"
+        await callback.message.answer(  # type: ignore[union-attr]
+            f"Step {step} — <b>Language?</b>\n\nChoose the language for the generated messages:",
+            reply_markup=language_keyboard(),
+            parse_mode="HTML",
+        )
+    await callback.answer()
+
+
+@router.message(ScheduleForm.waiting_for_messages)
+async def process_messages(message: Message, state: FSMContext) -> None:
+    if message.from_user is None or not await _is_approved(message.from_user.id):
+        return
+    raw = (message.text or "").strip()
+    msgs = [line.strip() for line in raw.splitlines() if line.strip()]
+    if not msgs:
+        await message.answer("Please enter at least one message.")
+        return
+    if len(msgs) > 20:
+        await message.answer("Maximum 20 messages. Please trim your list.")
+        return
+    if any(len(m) > 4000 for m in msgs):
+        await message.answer("Each message must be under 4000 characters.")
+        return
+
+    await state.update_data(messages=msgs)
+    data = await state.get_data()
+    await state.set_state(ScheduleForm.waiting_for_confirm)
+
+    jitter = data.get("jitter_seconds")
+    jitter_line = (
+        f"• Randomization: {_JITTER_LABELS.get(jitter, f'+{jitter}s')}\n" if jitter else ""
+    )
+    preview = msgs[0][:120] + ("…" if len(msgs[0]) > 120 else "")
+    count_line = f" ({len(msgs)} messages, random pick)" if len(msgs) > 1 else ""
+
+    await message.answer(
+        "📋 <b>Confirm your schedule:</b>\n\n"
+        f"• Recipient: <code>{data['target']}</code>\n"
+        f"• Frequency: {data['interval_label']}\n"
+        f"{jitter_line}"
+        f"• Mode: ✍️ Exact message{count_line}\n"
+        f"• Preview: <i>{preview}</i>\n\n"
+        f"Ready to activate?{_BOT_SEND_NOTICE}",
+        reply_markup=confirm_keyboard(),
         parse_mode="HTML",
     )
 
@@ -360,7 +489,9 @@ async def process_language(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.message.edit_reply_markup()  # type: ignore[union-attr]
 
     data = await state.get_data()
-    step = "5" if data.get("interval_type") != "window" else "4"
+    # window: target(1) interval(2) mode(3) lang(4) → topic(5)
+    # other:  target(1) interval(2) rand(3) mode(4) lang(5) → topic(6)
+    step = "5" if data.get("interval_type") == "window" else "6"
     await state.set_state(ScheduleForm.waiting_for_topic)
     await callback.message.answer(  # type: ignore[union-attr]
         f"Step {step} — <b>What should the messages be about?</b>\n\n"
@@ -408,8 +539,7 @@ async def confirm_yes(callback: CallbackQuery, state: FSMContext) -> None:
         return
 
     uid = callback.from_user.id
-    is_admin = uid == settings.telegram_admin_id
-    if not is_admin:
+    if not await _is_admin(uid):
         n = await count_user_tasks(uid)
         if n >= settings.max_schedules_per_user:
             await callback.message.answer(  # type: ignore[union-attr]
@@ -424,26 +554,38 @@ async def confirm_yes(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.message.edit_reply_markup()  # type: ignore[union-attr]
 
     jitter: int | None = data.get("jitter_seconds")
-    language: str = data.get("language", "English")
-
     interval_label = data["interval_label"]
     if jitter:
         interval_label += f" ({_JITTER_LABELS.get(jitter, f'+{jitter}s')} randomization)"
+
+    mode: str = data.get("message_mode", "ai")
+    messages_json: str | None = None
+    if mode == "exact":
+        msgs: list[str] = data.get("messages", [])
+        messages_json = json.dumps(msgs, ensure_ascii=False)
+        topic = msgs[0][:100]
+        language = "—"
+    else:
+        topic = data["topic"]
+        language = data.get("language", "English")
 
     try:
         task = await create_task(
             user_telegram_id=uid,
             target_username=data["target"],
-            topic=data["topic"],
+            topic=topic,
             interval_type=data["interval_type"],
             interval_value=data["interval_value"],
             interval_label=interval_label,
             jitter_seconds=jitter,
             language=language,
+            message_mode=mode,
+            messages_json=messages_json,
         )
+        mode_label = "✍️ exact" if mode == "exact" else f"🤖 AI · {task.language}"
         await callback.message.answer(  # type: ignore[union-attr]
             f"✅ Schedule created! (ID: <code>{task.id}</code>)\n"
-            f"Sending to {task.target_username} — {task.interval_label} — {task.language}.",
+            f"Sending to {task.target_username} — {task.interval_label} — {mode_label}.",
             parse_mode="HTML",
         )
     except Exception:
@@ -473,7 +615,7 @@ async def cmd_list(message: Message) -> None:
         return
 
     uid = message.from_user.id
-    is_admin = uid == settings.telegram_admin_id
+    is_admin = await _is_admin(uid)
     tasks = await list_all_active_tasks() if is_admin else await list_active_tasks(uid)
 
     if not tasks:
@@ -498,13 +640,19 @@ async def cmd_list(message: Message) -> None:
             if task.consecutive_failures > 0
             else ""
         )
+        if task.message_mode == "exact":
+            mode_line = "• Mode: ✍️ Exact message\n"
+            content_line = f"• Preview: <i>{task.topic[:80]}</i>\n"
+        else:
+            mode_line = f"• Language: {task.language}\n"
+            content_line = f"• Topic: <i>{task.topic}</i>\n"
         text = (
             f"{header} <b>Schedule #{task.id}</b>{paused_suffix}\n"
             f"{owner_line}"
             f"• To: <code>{task.target_username}</code>\n"
             f"• Frequency: {task.interval_label}\n"
-            f"• Language: {task.language}\n"
-            f"• Topic: <i>{task.topic}</i>\n"
+            f"{mode_line}"
+            f"{content_line}"
             f"• Last sent: {last}\n"
             f"• Next run: {next_run}\n"
             f"{failure_line}"
@@ -532,7 +680,7 @@ async def cancel_task_callback(callback: CallbackQuery) -> None:
         return
     task_id = int(callback.data.split(":")[1])  # type: ignore[union-attr]
     uid = callback.from_user.id
-    is_admin = uid == settings.telegram_admin_id
+    is_admin = await _is_admin(uid)
     success = await cancel_task(task_id, uid, force=is_admin)
     await callback.message.edit_reply_markup()  # type: ignore[union-attr]
     if success:
@@ -548,7 +696,7 @@ async def pause_task_callback(callback: CallbackQuery) -> None:
         return
     task_id = int(callback.data.split(":")[1])  # type: ignore[union-attr]
     uid = callback.from_user.id
-    is_admin = uid == settings.telegram_admin_id
+    is_admin = await _is_admin(uid)
     success = await pause_task(task_id, uid, force=is_admin)
     await callback.message.edit_reply_markup()  # type: ignore[union-attr]
     if success:
@@ -568,7 +716,7 @@ async def resume_task_callback(callback: CallbackQuery) -> None:
         return
     task_id = int(callback.data.split(":")[1])  # type: ignore[union-attr]
     uid = callback.from_user.id
-    is_admin = uid == settings.telegram_admin_id
+    is_admin = await _is_admin(uid)
     success = await resume_task(task_id, uid, force=is_admin)
     await callback.message.edit_reply_markup()  # type: ignore[union-attr]
     if success:
@@ -588,7 +736,7 @@ async def send_now_callback(callback: CallbackQuery) -> None:
         return
     task_id = int(callback.data.split(":")[1])  # type: ignore[union-attr]
     uid = callback.from_user.id
-    is_admin = uid == settings.telegram_admin_id
+    is_admin = await _is_admin(uid)
 
     if not is_admin and not await _is_approved(uid):
         await callback.answer("Access denied.", show_alert=True)
@@ -631,9 +779,11 @@ async def cb_history(callback: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("edit_task:"))
 async def cb_edit_task(callback: CallbackQuery) -> None:
     task_id = int(callback.data.split(":")[1])  # type: ignore[union-attr]
+    task = await get_task(task_id)
+    mode = task.message_mode if task else "ai"
     await callback.message.answer(  # type: ignore[union-attr]
         f"✏️ <b>Edit Schedule #{task_id}</b>\n\nWhat would you like to change?",
-        reply_markup=edit_field_keyboard(task_id),
+        reply_markup=edit_field_keyboard(task_id, mode),
         parse_mode="HTML",
     )
     await callback.answer()
@@ -660,7 +810,7 @@ async def process_edit_topic(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     task_id: int = data["edit_task_id"]
     uid = message.from_user.id
-    ok = await update_task_topic(task_id, uid, topic, force=uid == settings.telegram_admin_id)
+    ok = await update_task_topic(task_id, uid, topic, force=await _is_admin(uid))
     await state.clear()
     if ok:
         await message.answer(f"✅ Topic updated for Schedule #{task_id}.")
@@ -689,7 +839,7 @@ async def cb_edit_lang_val(callback: CallbackQuery) -> None:
     task_id = int(parts[1])
     language = parts[2]
     uid = callback.from_user.id
-    ok = await update_task_language(task_id, uid, language, force=uid == settings.telegram_admin_id)
+    ok = await update_task_language(task_id, uid, language, force=await _is_admin(uid))
     await callback.message.edit_reply_markup()  # type: ignore[union-attr]
     if ok:
         await callback.message.answer(  # type: ignore[union-attr]
@@ -744,7 +894,7 @@ async def process_edit_interval(message: Message, state: FSMContext) -> None:
     uid = message.from_user.id
     ok = await update_task_interval(
         task_id, uid, interval_type, interval_value, interval_label,
-        force=uid == settings.telegram_admin_id,
+        force=await _is_admin(uid),
     )
     await state.clear()
     if ok:
@@ -752,5 +902,49 @@ async def process_edit_interval(message: Message, state: FSMContext) -> None:
             f"✅ Frequency updated to <b>{interval_label}</b> for Schedule #{task_id}.",
             parse_mode="HTML",
         )
+    else:
+        await message.answer(f"❌ Could not update Schedule #{task_id}.")
+
+
+@router.callback_query(F.data.startswith("edit_messages:"))
+async def cb_edit_messages(callback: CallbackQuery, state: FSMContext) -> None:
+    task_id = int(callback.data.split(":")[1])  # type: ignore[union-attr]
+    await state.update_data(edit_task_id=task_id)
+    await state.set_state(EditForm.waiting_for_messages)
+    await callback.message.edit_reply_markup()  # type: ignore[union-attr]
+    await callback.message.answer(  # type: ignore[union-attr]
+        "📝 Enter the new message(s), one per line.\n"
+        "Multiple messages = one picked randomly each send.\n\n"
+        "<i>Maximum 20 messages, 4000 characters each.</i>",
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.message(EditForm.waiting_for_messages)
+async def process_edit_messages(message: Message, state: FSMContext) -> None:
+    if message.from_user is None or not await _is_approved(message.from_user.id):
+        return
+    raw = (message.text or "").strip()
+    msgs = [line.strip() for line in raw.splitlines() if line.strip()]
+    if not msgs:
+        await message.answer("Please enter at least one message.")
+        return
+    if len(msgs) > 20:
+        await message.answer("Maximum 20 messages. Please trim your list.")
+        return
+    if any(len(m) > 4000 for m in msgs):
+        await message.answer("Each message must be under 4000 characters.")
+        return
+    data = await state.get_data()
+    task_id: int = data["edit_task_id"]
+    uid = message.from_user.id
+    ok = await update_task_messages(
+        task_id, uid, json.dumps(msgs, ensure_ascii=False), force=await _is_admin(uid)
+    )
+    await state.clear()
+    if ok:
+        count_label = f"{len(msgs)} messages" if len(msgs) > 1 else "message"
+        await message.answer(f"✅ Updated {count_label} for Schedule #{task_id}.")
     else:
         await message.answer(f"❌ Could not update Schedule #{task_id}.")

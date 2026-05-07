@@ -42,15 +42,6 @@ def task_keyboard(task_id: int, is_paused: bool) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def edit_field_keyboard(task_id: int) -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    builder.button(text="📝 Topic", callback_data=f"edit_topic:{task_id}")
-    builder.button(text="🌐 Language", callback_data=f"edit_lang:{task_id}")
-    builder.button(text="⏱ Frequency", callback_data=f"edit_freq:{task_id}")
-    builder.adjust(3)
-    return builder.as_markup()
-
-
 def edit_language_keyboard(task_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for label, data in LANGUAGE_OPTIONS:
@@ -76,6 +67,26 @@ def language_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def message_mode_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🤖 AI-generated", callback_data="mode:ai")
+    builder.button(text="✍️ Exact message", callback_data="mode:exact")
+    builder.adjust(2)
+    return builder.as_markup()
+
+
+def edit_field_keyboard(task_id: int, message_mode: str = "ai") -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    if message_mode == "exact":
+        builder.button(text="📝 Messages", callback_data=f"edit_messages:{task_id}")
+    else:
+        builder.button(text="📝 Topic", callback_data=f"edit_topic:{task_id}")
+        builder.button(text="🌐 Language", callback_data=f"edit_lang:{task_id}")
+    builder.button(text="⏱ Frequency", callback_data=f"edit_freq:{task_id}")
+    builder.adjust(3 if message_mode == "ai" else 2)
+    return builder.as_markup()
+
+
 def block_keyboard(telegram_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="🚫 Block", callback_data=f"block_user:{telegram_id}")
@@ -85,4 +96,16 @@ def block_keyboard(telegram_id: int) -> InlineKeyboardMarkup:
 def unblock_keyboard(telegram_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Unblock", callback_data=f"unblock_user:{telegram_id}")
+    return builder.as_markup()
+
+
+def active_user_keyboard(telegram_id: int, is_admin: bool) -> InlineKeyboardMarkup:
+    """Master-admin view: block + grant/revoke admin."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🚫 Block", callback_data=f"block_user:{telegram_id}")
+    if is_admin:
+        builder.button(text="👑 Remove admin", callback_data=f"revoke_admin:{telegram_id}")
+    else:
+        builder.button(text="👑 Grant admin", callback_data=f"grant_admin:{telegram_id}")
+    builder.adjust(2)
     return builder.as_markup()

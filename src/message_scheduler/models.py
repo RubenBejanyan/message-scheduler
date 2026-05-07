@@ -15,6 +15,9 @@ class RegisteredUser(Base):
     username: Mapped[str | None] = mapped_column(String(100), nullable=True)
     first_name: Mapped[str] = mapped_column(String(100), nullable=False)
     is_approved: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_admin: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default="FALSE"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -49,6 +52,13 @@ class ScheduledTask(Base):
     job_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
 
     is_paused: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    # "ai" → generate via LLM; "exact" → pick randomly from messages_json list
+    message_mode: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="ai", server_default="ai"
+    )
+    # JSON array of strings, used only when message_mode == "exact"
+    messages_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     consecutive_failures: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"

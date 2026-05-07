@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 
 from .ai_generator import generate_message
 from .database import async_session_factory
@@ -148,14 +148,17 @@ async def create_task(
     return task
 
 
-async def cancel_task(task_id: int, user_telegram_id: int) -> bool:
+async def cancel_task(task_id: int, user_telegram_id: int, force: bool = False) -> bool:
     """Deactivate a task and remove it from APScheduler.
 
     Returns False if the task doesn't exist or belongs to a different user.
+    Pass force=True (admin only) to bypass ownership check.
     """
     async with async_session_factory() as session:
         task = await session.get(ScheduledTask, task_id)
-        if task is None or task.user_telegram_id != user_telegram_id:
+        if task is None:
+            return False
+        if not force and task.user_telegram_id != user_telegram_id:
             return False
         task.is_active = False
         await session.commit()
@@ -178,6 +181,37 @@ async def list_active_tasks(user_telegram_id: int) -> list[ScheduledTask]:
             .order_by(ScheduledTask.created_at)
         )
         return list(result.scalars().all())
+
+
+async def list_all_active_tasks() -> list[ScheduledTask]:
+    """Admin: all active tasks regardless of owner (catches NULL user_telegram_id zombies)."""
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(ScheduledTask)
+            .where(ScheduledTask.is_active == True)  # noqa: E712
+            .order_by(ScheduledTask.created_at)
+        )
+        return list(result.scalars().all())
+
+
+async def count_active_tasks_per_user() -> dict[int, int]:
+    """Return {user_telegram_id: active_task_count} for all users with active tasks."""
+    async with async_session_factory() as session:
+        rows = await session.execute(
+            select(ScheduledTask.user_telegram_id, func.count().label("cnt"))
+            .where(ScheduledTask.is_active == True)  # noqa: E712
+            .where(ScheduledTask.user_telegram_id.is_not(None))
+            .group_by(ScheduledTask.user_telegram_id)
+        )
+        return {row.user_telegram_id: row.cnt for row in rows}
+
+
+def get_next_run_time(job_id: str) -> datetime | None:
+    """Return APScheduler's next_run_time for the given job, or None if not found."""
+    job = scheduler.get_job(job_id)
+    if job is None:
+        return None
+    return job.next_run_time  # type: ignore[return-value]
 
 
 def parse_interval(text: str) -> tuple[str, str, str] | None:

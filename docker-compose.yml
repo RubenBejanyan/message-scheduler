@@ -1,0 +1,21 @@
+services:
+  message_scheduler:
+    image: ghcr.io/rubenbejanyan/message-scheduler:latest
+    container_name: message_scheduler
+    restart: always
+    env_file:
+      - .env
+    environment:
+      # Uses the Docker service name "postgres" reachable via infra_net
+      DATABASE_URL: postgresql+asyncpg://user:password@postgres:5432/dev_db
+      TELETHON_SESSION_PATH: /app/user_session
+    volumes:
+      - ./user_session.session:/app/user_session.session
+      - ./sessions:/app/sessions
+    networks:
+      - infra_net
+
+networks:
+  infra_net:
+    external: true
+    name: infra_net

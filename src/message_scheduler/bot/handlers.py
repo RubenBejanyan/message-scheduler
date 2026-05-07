@@ -6,7 +6,15 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from ..config import settings
-from ..scheduler import cancel_task, create_task, list_active_tasks, parse_interval
+from ..scheduler import (
+    cancel_task,
+    count_active_tasks_per_user,
+    create_task,
+    get_next_run_time,
+    list_active_tasks,
+    list_all_active_tasks,
+    parse_interval,
+)
 from ..users import (
     block_user,
     get_user,
@@ -119,12 +127,16 @@ async def cmd_users(message: Message) -> None:
         await message.answer("No registered users yet.")
         return
 
+    task_counts = await count_active_tasks_per_user()
+
     if active:
         await message.answer(f"<b>Active users ({len(active)})</b>", parse_mode="HTML")
         for u in active:
             display = f"@{u.username}" if u.username else u.first_name
+            n_tasks = task_counts.get(u.telegram_id, 0)
+            sched = f"🗓 {n_tasks} active schedule(s)" if n_tasks else "🗓 No active schedules"
             await message.answer(
-                f"• {u.first_name} {display} — <code>{u.telegram_id}</code>",
+                f"• {u.first_name} {display} — <code>{u.telegram_id}</code>\n  {sched}",
                 reply_markup=block_keyboard(u.telegram_id),
                 parse_mode="HTML",
             )
@@ -133,8 +145,10 @@ async def cmd_users(message: Message) -> None:
         await message.answer(f"<b>Blocked users ({len(blocked)})</b>", parse_mode="HTML")
         for u in blocked:
             display = f"@{u.username}" if u.username else u.first_name
+            n_tasks = task_counts.get(u.telegram_id, 0)
+            sched = f"🗓 {n_tasks} active schedule(s)" if n_tasks else "🗓 No active schedules"
             await message.answer(
-                f"• {u.first_name} {display} — <code>{u.telegram_id}</code>",
+                f"• {u.first_name} {display} — <code>{u.telegram_id}</code>\n  {sched}",
                 reply_markup=unblock_keyboard(u.telegram_id),
                 parse_mode="HTML",
             )
@@ -419,20 +433,32 @@ async def cmd_list(message: Message) -> None:
         await message.answer("You don't have access to this bot.")
         return
 
-    tasks = await list_active_tasks(message.from_user.id)
+    uid = message.from_user.id
+    is_admin = uid == settings.telegram_admin_id
+    tasks = await list_all_active_tasks() if is_admin else await list_active_tasks(uid)
+
     if not tasks:
         await message.answer("No active schedules. Use /schedule to create one.")
         return
 
     for task in tasks:
         last = task.last_sent_at.strftime("%Y-%m-%d %H:%M UTC") if task.last_sent_at else "never"
+        nrt = get_next_run_time(task.job_id)
+        next_run = nrt.strftime("%Y-%m-%d %H:%M UTC") if nrt else "—"
+        owner_line = (
+            f"• Owner: <code>{task.user_telegram_id or 'unknown (legacy)'}</code>\n"
+            if is_admin
+            else ""
+        )
         text = (
             f"🗓 <b>Schedule #{task.id}</b>\n"
+            f"{owner_line}"
             f"• To: <code>{task.target_username}</code>\n"
             f"• Frequency: {task.interval_label}\n"
             f"• Language: {task.language}\n"
             f"• Topic: <i>{task.topic}</i>\n"
-            f"• Last sent: {last}"
+            f"• Last sent: {last}\n"
+            f"• Next run: {next_run}"
         )
         await message.answer(text, reply_markup=cancel_task_keyboard(task.id), parse_mode="HTML")
 
@@ -454,7 +480,9 @@ async def cancel_task_callback(callback: CallbackQuery) -> None:
     if callback.from_user is None:
         return
     task_id = int(callback.data.split(":")[1])  # type: ignore[union-attr]
-    success = await cancel_task(task_id, callback.from_user.id)
+    uid = callback.from_user.id
+    is_admin = uid == settings.telegram_admin_id
+    success = await cancel_task(task_id, uid, force=is_admin)
     await callback.message.edit_reply_markup()  # type: ignore[union-attr]
     if success:
         await callback.message.answer(f"🗑 Schedule #{task_id} cancelled.")  # type: ignore[union-attr]

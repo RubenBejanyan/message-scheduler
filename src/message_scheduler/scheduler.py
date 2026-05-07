@@ -1,6 +1,7 @@
 import logging
 import uuid
 from datetime import UTC, datetime
+from typing import cast
 
 from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -211,7 +212,7 @@ def get_next_run_time(job_id: str) -> datetime | None:
     job = scheduler.get_job(job_id)
     if job is None:
         return None
-    return job.next_run_time  # type: ignore[return-value]
+    return cast(datetime | None, job.next_run_time)
 
 
 def parse_interval(text: str) -> tuple[str, str, str] | None:

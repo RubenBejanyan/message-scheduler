@@ -7,6 +7,15 @@ services:
       - .env
     networks:
       - infra_net
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          memory: 256m
 
   watchtower:
     image: containrrr/watchtower
@@ -17,6 +26,11 @@ services:
     environment:
       - DOCKER_API_VERSION=1.41
     command: --interval 60 message_scheduler
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
 
 networks:
   infra_net:

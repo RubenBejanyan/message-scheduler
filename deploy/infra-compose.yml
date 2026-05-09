@@ -30,6 +30,31 @@ services:
     networks:
       - infra_net
 
+  pgbackup:
+    image: postgres:15-alpine
+    container_name: pgbackup
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_USER: ${POSTGRES_USER:-msched}
+      POSTGRES_DB: ${POSTGRES_DB:-message_scheduler}
+    volumes:
+      - /opt/backups/postgres:/backups
+    networks:
+      - infra_net
+    # Runs pg_dump daily at 03:00 UTC; keeps 7 days of compressed dumps.
+    # Restore: zcat /opt/backups/postgres/<file>.sql.gz | docker exec -i global_db psql -U msched message_scheduler
+    entrypoint:
+      - sh
+      - -c
+      - |
+        mkdir -p /backups
+        echo "0 3 * * * pg_dump -h postgres -U $$POSTGRES_USER $$POSTGRES_DB | gzip > /backups/backup_\$$(date +%%Y%%m%%d).sql.gz && find /backups -name '*.sql.gz' -mtime +7 -delete" > /etc/crontabs/root
+        crond -f -l 6
+
 volumes:
   postgres_data:
 

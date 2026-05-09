@@ -84,13 +84,16 @@ async def _execute_job(task_id: int) -> None:
         await _record_sent(task, text)
         logger.info("Job %s: sent to %s", task.job_id, task.target_username)
 
-        if prev_failures > 0 and task.user_telegram_id:
-            await _notify_owner(
-                task.user_telegram_id,
-                f"✅ <b>Schedule #{task_id} recovered</b>\n"
-                f"Delivered to <code>{task.target_username}</code> "
-                f"(was failing for {prev_failures} attempt(s)).",
-            )
+        if task.user_telegram_id:
+            if prev_failures > 0:
+                msg = (
+                    f"✅ <b>Schedule #{task_id} recovered</b>\n"
+                    f"Delivered to <code>{task.target_username}</code> "
+                    f"(was failing for {prev_failures} attempt(s))."
+                )
+            else:
+                msg = f"✅ Sent to <code>{task.target_username}</code>"
+            await _notify_owner(task.user_telegram_id, msg)
 
     except Exception as exc:
         failures = task.consecutive_failures + 1

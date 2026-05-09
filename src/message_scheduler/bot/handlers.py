@@ -26,6 +26,7 @@ from ..scheduler import (
     update_task_language,
     update_task_messages,
     update_task_target,
+    update_task_timezone,
     update_task_topic,
 )
 from ..users import (
@@ -43,10 +44,12 @@ from .keyboards import (
     confirm_keyboard,
     edit_field_keyboard,
     edit_language_keyboard,
+    edit_timezone_keyboard,
     language_keyboard,
     message_mode_keyboard,
     randomization_keyboard,
     task_keyboard,
+    timezone_keyboard,
     unblock_keyboard,
 )
 from .states import EditForm, ScheduleForm
@@ -365,15 +368,9 @@ async def process_interval(message: Message, state: FSMContext) -> None:
         interval_label=interval_label,
     )
 
-    if interval_type == "window":
-        await state.update_data(jitter_seconds=None)
-        await state.set_state(ScheduleForm.waiting_for_mode)
-        await message.answer(
-            "Step 3 — <b>What should I send?</b>",
-            reply_markup=message_mode_keyboard(),
-            parse_mode="HTML",
-        )
-    else:
+    if interval_type == "interval":
+        # Relative intervals are timezone-agnostic — skip timezone step.
+        await state.update_data(timezone="UTC")
         await state.set_state(ScheduleForm.waiting_for_randomization)
         await message.answer(
             "Step 3 — <b>Randomization</b>\n\n"
@@ -383,6 +380,43 @@ async def process_interval(message: Message, state: FSMContext) -> None:
             reply_markup=randomization_keyboard(),
             parse_mode="HTML",
         )
+    else:
+        # cron and window fire at a specific local time — ask for timezone first.
+        if interval_type == "window":
+            await state.update_data(jitter_seconds=None)
+        await state.set_state(ScheduleForm.waiting_for_timezone)
+        await message.answer(
+            "Step 3 — <b>Timezone</b>\n\nWhat timezone should the schedule use?",
+            reply_markup=timezone_keyboard(),
+            parse_mode="HTML",
+        )
+
+
+@router.callback_query(F.data.startswith("tz:"), ScheduleForm.waiting_for_timezone)
+async def process_timezone(callback: CallbackQuery, state: FSMContext) -> None:
+    tz = (callback.data or "").split(":")[1]
+    await state.update_data(timezone=tz)
+    data = await state.get_data()
+    await callback.message.edit_reply_markup()  # type: ignore[union-attr]
+
+    if data.get("interval_type") == "window":
+        await state.set_state(ScheduleForm.waiting_for_mode)
+        await callback.message.answer(  # type: ignore[union-attr]
+            "Step 4 — <b>What should I send?</b>",
+            reply_markup=message_mode_keyboard(),
+            parse_mode="HTML",
+        )
+    else:  # cron
+        await state.set_state(ScheduleForm.waiting_for_randomization)
+        await callback.message.answer(  # type: ignore[union-attr]
+            "Step 4 — <b>Randomization</b>\n\n"
+            "Add a random delay so messages don't always arrive at the exact same time.\n\n"
+            "Pick a preset or type a custom amount (e.g. <code>45m</code>, <code>3h</code>, "
+            "<code>90</code> for 90 minutes):",
+            reply_markup=randomization_keyboard(),
+            parse_mode="HTML",
+        )
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("jitter:"), ScheduleForm.waiting_for_randomization)
@@ -390,10 +424,12 @@ async def process_randomization(callback: CallbackQuery, state: FSMContext) -> N
     raw = int(callback.data.split(":")[1])  # type: ignore[union-attr]
     jitter = raw if raw > 0 else None
     await state.update_data(jitter_seconds=jitter)
+    data = await state.get_data()
+    step = "5" if data.get("interval_type") == "cron" else "4"
     await callback.message.edit_reply_markup()  # type: ignore[union-attr]
     await state.set_state(ScheduleForm.waiting_for_mode)
     await callback.message.answer(  # type: ignore[union-attr]
-        "Step 4 — <b>What should I send?</b>",
+        f"Step {step} — <b>What should I send?</b>",
         reply_markup=message_mode_keyboard(),
         parse_mode="HTML",
     )
@@ -414,9 +450,11 @@ async def process_randomization_text(message: Message, state: FSMContext) -> Non
         return
     jitter: int | None = result  # type: ignore[assignment]
     await state.update_data(jitter_seconds=jitter)
+    data = await state.get_data()
+    step = "5" if data.get("interval_type") == "cron" else "4"
     await state.set_state(ScheduleForm.waiting_for_mode)
     await message.answer(
-        "Step 4 — <b>What should I send?</b>",
+        f"Step {step} — <b>What should I send?</b>",
         reply_markup=message_mode_keyboard(),
         parse_mode="HTML",
     )
@@ -428,11 +466,12 @@ async def process_mode(callback: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(message_mode=mode)
     await callback.message.edit_reply_markup()  # type: ignore[union-attr]
     data = await state.get_data()
-    is_window = data.get("interval_type") == "window"
+    interval_type = data.get("interval_type", "interval")
+    # window: 4-mode → 5-content; cron: 5-mode → 6-content; interval: 4-mode → 5-content
+    step = "6" if interval_type == "cron" else "5"
 
     if mode == "exact":
         await state.set_state(ScheduleForm.waiting_for_messages)
-        step = "4" if is_window else "5"
         await callback.message.answer(  # type: ignore[union-attr]
             f"Step {step} — <b>Enter your message(s)</b>\n\n"
             "Type one message — or multiple messages, one per line. "
@@ -442,7 +481,6 @@ async def process_mode(callback: CallbackQuery, state: FSMContext) -> None:
         )
     else:
         await state.set_state(ScheduleForm.waiting_for_language)
-        step = "4" if is_window else "5"
         await callback.message.answer(  # type: ignore[union-attr]
             f"Step {step} — <b>Language?</b>\n\nChoose the language for the generated messages:",
             reply_markup=language_keyboard(),
@@ -472,9 +510,9 @@ async def process_messages(message: Message, state: FSMContext) -> None:
     await state.set_state(ScheduleForm.waiting_for_confirm)
 
     jitter = data.get("jitter_seconds")
-    jitter_line = (
-        f"• Randomization: {_jitter_label(jitter)}\n" if jitter else ""
-    )
+    jitter_line = f"• Randomization: {_jitter_label(jitter)}\n" if jitter else ""
+    tz = data.get("timezone", "UTC")
+    tz_line = f"• Timezone: {tz}\n" if data.get("interval_type") != "interval" else ""
     preview = msgs[0][:120] + ("…" if len(msgs[0]) > 120 else "")
     count_line = f" ({len(msgs)} messages, random pick)" if len(msgs) > 1 else ""
 
@@ -482,6 +520,7 @@ async def process_messages(message: Message, state: FSMContext) -> None:
         "📋 <b>Confirm your schedule:</b>\n\n"
         f"• Recipient: <code>{data['target']}</code>\n"
         f"• Frequency: {data['interval_label']}\n"
+        f"{tz_line}"
         f"{jitter_line}"
         f"• Mode: ✍️ Exact message{count_line}\n"
         f"• Preview: <i>{preview}</i>\n\n"
@@ -498,9 +537,10 @@ async def process_language(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.message.edit_reply_markup()  # type: ignore[union-attr]
 
     data = await state.get_data()
-    # window: target(1) interval(2) mode(3) lang(4) → topic(5)
-    # other:  target(1) interval(2) rand(3) mode(4) lang(5) → topic(6)
-    step = "5" if data.get("interval_type") == "window" else "6"
+    # interval: rand(3) mode(4) lang(5) → topic(6)
+    # window:   tz(3)   mode(4) lang(5) → topic(6)
+    # cron:     tz(3)   rand(4) mode(5) lang(6) → topic(7)
+    step = "7" if data.get("interval_type") == "cron" else "6"
     await state.set_state(ScheduleForm.waiting_for_topic)
     await callback.message.answer(  # type: ignore[union-attr]
         f"Step {step} — <b>What should the messages be about?</b>\n\n"
@@ -525,14 +565,15 @@ async def process_topic(message: Message, state: FSMContext) -> None:
     await state.set_state(ScheduleForm.waiting_for_confirm)
 
     jitter = data.get("jitter_seconds")
-    jitter_line = (
-        f"• Randomization: {_jitter_label(jitter)}\n" if jitter else ""
-    )
+    jitter_line = f"• Randomization: {_jitter_label(jitter)}\n" if jitter else ""
+    tz = data.get("timezone", "UTC")
+    tz_line = f"• Timezone: {tz}\n" if data.get("interval_type") != "interval" else ""
 
     await message.answer(
         "📋 <b>Confirm your schedule:</b>\n\n"
         f"• Recipient: <code>{data['target']}</code>\n"
         f"• Frequency: {data['interval_label']}\n"
+        f"{tz_line}"
         f"{jitter_line}"
         f"• Language: {data.get('language', 'English')}\n"
         f"• Topic: <i>{topic}</i>\n\n"
@@ -590,6 +631,7 @@ async def confirm_yes(callback: CallbackQuery, state: FSMContext) -> None:
             language=language,
             message_mode=mode,
             messages_json=messages_json,
+            timezone=data.get("timezone", "UTC"),
         )
         mode_label = "✍️ exact" if mode == "exact" else f"🤖 AI · {task.language}"
         await callback.message.answer(  # type: ignore[union-attr]
@@ -649,6 +691,9 @@ async def cmd_list(message: Message) -> None:
             if task.consecutive_failures > 0
             else ""
         )
+        tz_line = (
+            f"• Timezone: {task.timezone}\n" if task.interval_type != "interval" else ""
+        )
         if task.message_mode == "exact":
             mode_line = "• Mode: ✍️ Exact message\n"
             content_line = f"• Preview: <i>{task.topic[:80]}</i>\n"
@@ -660,6 +705,7 @@ async def cmd_list(message: Message) -> None:
             f"{owner_line}"
             f"• To: <code>{task.target_username}</code>\n"
             f"• Frequency: {task.interval_label}\n"
+            f"{tz_line}"
             f"{mode_line}"
             f"{content_line}"
             f"• Last sent: {last}\n"
@@ -790,9 +836,10 @@ async def cb_edit_task(callback: CallbackQuery) -> None:
     task_id = int(callback.data.split(":")[1])  # type: ignore[union-attr]
     task = await get_task(task_id)
     mode = task.message_mode if task else "ai"
+    interval_type = task.interval_type if task else "interval"
     await callback.message.answer(  # type: ignore[union-attr]
         f"✏️ <b>Edit Schedule #{task_id}</b>\n\nWhat would you like to change?",
-        reply_markup=edit_field_keyboard(task_id, mode),
+        reply_markup=edit_field_keyboard(task_id, mode, interval_type),
         parse_mode="HTML",
     )
     await callback.answer()
@@ -991,6 +1038,36 @@ async def process_edit_target(message: Message, state: FSMContext) -> None:
         )
     else:
         await message.answer(f"❌ Could not update Schedule #{task_id}.")
+
+
+@router.callback_query(F.data.startswith("edit_tz:"))
+async def cb_edit_tz(callback: CallbackQuery) -> None:
+    task_id = int(callback.data.split(":")[1])  # type: ignore[union-attr]
+    await callback.message.edit_reply_markup()  # type: ignore[union-attr]
+    await callback.message.answer(  # type: ignore[union-attr]
+        "🕐 Choose the new timezone:",
+        reply_markup=edit_timezone_keyboard(task_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("edit_tz_val:"))
+async def cb_edit_tz_val(callback: CallbackQuery) -> None:
+    if callback.from_user is None:
+        return
+    parts = (callback.data or "").split(":")
+    task_id = int(parts[1])
+    tz = parts[2]
+    uid = callback.from_user.id
+    ok = await update_task_timezone(task_id, uid, tz, force=await _is_admin(uid))
+    await callback.message.edit_reply_markup()  # type: ignore[union-attr]
+    if ok:
+        await callback.message.answer(  # type: ignore[union-attr]
+            f"✅ Timezone updated to <b>{tz}</b> for Schedule #{task_id}.", parse_mode="HTML"
+        )
+    else:
+        await callback.message.answer(f"❌ Could not update Schedule #{task_id}.")  # type: ignore[union-attr]
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("preview:"))

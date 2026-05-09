@@ -4,6 +4,7 @@ import random
 import uuid
 from datetime import UTC, datetime
 from typing import cast
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -165,6 +166,8 @@ def _add_apscheduler_job(task: ScheduledTask) -> None:
     """Register a task in APScheduler based on its interval type."""
     jitter = task.jitter_seconds or 0
 
+    tz = ZoneInfo(task.timezone or "UTC")
+
     if task.interval_type == "interval":
         scheduler.add_job(
             _execute_job,
@@ -183,6 +186,7 @@ def _add_apscheduler_job(task: ScheduledTask) -> None:
             "cron",
             hour=int(hour),
             minute=int(minute),
+            timezone=tz,
             jitter=jitter,
             id=task.job_id,
             args=[task.id],
@@ -199,6 +203,7 @@ def _add_apscheduler_job(task: ScheduledTask) -> None:
             "cron",
             hour=s_h,
             minute=s_m,
+            timezone=tz,
             jitter=max(0, window_secs),
             id=task.job_id,
             args=[task.id],
@@ -236,6 +241,7 @@ async def create_task(
     language: str = "English",
     message_mode: str = "ai",
     messages_json: str | None = None,
+    timezone: str = "UTC",
 ) -> ScheduledTask:
     """Persist a new scheduled task and register it with APScheduler."""
     job_id = f"task_{uuid.uuid4().hex[:12]}"
@@ -251,6 +257,7 @@ async def create_task(
         language=language,
         message_mode=message_mode,
         messages_json=messages_json,
+        timezone=timezone,
         job_id=job_id,
         is_active=True,
     )
@@ -393,6 +400,23 @@ async def update_task_target(
             return False
         task.target_username = target_username
         await session.commit()
+    return True
+
+
+async def update_task_timezone(
+    task_id: int, user_telegram_id: int, tz: str, force: bool = False
+) -> bool:
+    async with async_session_factory() as session:
+        task = await session.get(ScheduledTask, task_id)
+        if task is None or not task.is_active:
+            return False
+        if not force and task.user_telegram_id != user_telegram_id:
+            return False
+        task.timezone = tz
+        await session.commit()
+    # expire_on_commit=False — re-register with new timezone if running
+    if not task.is_paused and task.interval_type in ("cron", "window"):
+        _add_apscheduler_job(task)
     return True
 
 

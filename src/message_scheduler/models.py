@@ -62,6 +62,11 @@ class ScheduledTask(Base):
     # JSON array of strings, used only when message_mode == "exact"
     messages_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # IANA timezone name, e.g. "UTC", "Europe/Moscow". Relevant only for cron/window types.
+    timezone: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="UTC", server_default="UTC"
+    )
+
     consecutive_failures: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )

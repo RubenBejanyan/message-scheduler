@@ -1,6 +1,27 @@
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+TIMEZONE_OPTIONS: list[tuple[str, str]] = [
+    ("🌐 UTC", "UTC"),
+    ("🇺🇸 New York", "America/New_York"),
+    ("🇺🇸 Chicago", "America/Chicago"),
+    ("🇺🇸 Denver", "America/Denver"),
+    ("🇺🇸 Los Angeles", "America/Los_Angeles"),
+    ("🇧🇷 São Paulo", "America/Sao_Paulo"),
+    ("🇬🇧 London", "Europe/London"),
+    ("🇫🇷 Paris", "Europe/Paris"),
+    ("🇩🇪 Berlin", "Europe/Berlin"),
+    ("🇷🇺 Moscow", "Europe/Moscow"),
+    ("🇦🇲 Yerevan", "Asia/Yerevan"),
+    ("🇺🇦 Kyiv", "Europe/Kyiv"),
+    ("🇦🇪 Dubai", "Asia/Dubai"),
+    ("🇮🇳 Kolkata", "Asia/Kolkata"),
+    ("🇨🇳 Shanghai", "Asia/Shanghai"),
+    ("🇯🇵 Tokyo", "Asia/Tokyo"),
+    ("🇰🇷 Seoul", "Asia/Seoul"),
+    ("🇦🇺 Sydney", "Australia/Sydney"),
+]
+
 JITTER_OPTIONS: list[tuple[str, str]] = [
     ("No randomization", "jitter:0"),
     ("±15 minutes", "jitter:900"),
@@ -18,6 +39,22 @@ LANGUAGE_OPTIONS: list[tuple[str, str]] = [
     ("🇪🇸 Spanish", "lang:Spanish"),
     ("🇮🇹 Italian", "lang:Italian"),
 ]
+
+
+def timezone_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for label, tz in TIMEZONE_OPTIONS:
+        builder.button(text=label, callback_data=f"tz:{tz}")
+    builder.adjust(2)
+    return builder.as_markup()
+
+
+def edit_timezone_keyboard(task_id: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for label, tz in TIMEZONE_OPTIONS:
+        builder.button(text=label, callback_data=f"edit_tz_val:{task_id}:{tz}")
+    builder.adjust(2)
+    return builder.as_markup()
 
 
 def confirm_keyboard() -> InlineKeyboardMarkup:
@@ -76,7 +113,9 @@ def message_mode_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def edit_field_keyboard(task_id: int, message_mode: str = "ai") -> InlineKeyboardMarkup:
+def edit_field_keyboard(
+    task_id: int, message_mode: str = "ai", interval_type: str = "interval"
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     if message_mode == "exact":
         builder.button(text="📝 Messages", callback_data=f"edit_messages:{task_id}")
@@ -84,6 +123,8 @@ def edit_field_keyboard(task_id: int, message_mode: str = "ai") -> InlineKeyboar
         builder.button(text="📝 Topic", callback_data=f"edit_topic:{task_id}")
         builder.button(text="🌐 Language", callback_data=f"edit_lang:{task_id}")
     builder.button(text="⏱ Frequency", callback_data=f"edit_freq:{task_id}")
+    if interval_type != "interval":
+        builder.button(text="🕐 Timezone", callback_data=f"edit_tz:{task_id}")
     builder.button(text="📮 Recipient", callback_data=f"edit_target:{task_id}")
     builder.adjust(2)
     return builder.as_markup()

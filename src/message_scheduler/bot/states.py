@@ -13,6 +13,7 @@ class ScheduleForm(StatesGroup):
 
 
 class EditForm(StatesGroup):
+    waiting_for_target = State()
     waiting_for_topic = State()
     waiting_for_language = State()
     waiting_for_interval = State()

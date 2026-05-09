@@ -20,10 +20,12 @@ from ..scheduler import (
     list_tasks_by_users,
     parse_interval,
     pause_task,
+    preview_task,
     resume_task,
     update_task_interval,
     update_task_language,
     update_task_messages,
+    update_task_target,
     update_task_topic,
 )
 from ..users import (
@@ -955,3 +957,58 @@ async def process_edit_messages(message: Message, state: FSMContext) -> None:
         await message.answer(f"✅ Updated {count_label} for Schedule #{task_id}.")
     else:
         await message.answer(f"❌ Could not update Schedule #{task_id}.")
+
+
+@router.callback_query(F.data.startswith("edit_target:"))
+async def cb_edit_target(callback: CallbackQuery, state: FSMContext) -> None:
+    task_id = int(callback.data.split(":")[1])  # type: ignore[union-attr]
+    await state.update_data(edit_task_id=task_id)
+    await state.set_state(EditForm.waiting_for_target)
+    await callback.message.edit_reply_markup()  # type: ignore[union-attr]
+    await callback.message.answer(  # type: ignore[union-attr]
+        "📮 Enter the new recipient @username or @group handle:"
+    )
+    await callback.answer()
+
+
+@router.message(EditForm.waiting_for_target)
+async def process_edit_target(message: Message, state: FSMContext) -> None:
+    if message.from_user is None or not await _is_approved(message.from_user.id):
+        return
+    text = (message.text or "").strip()
+    if not text.startswith("@") or len(text) < 2:
+        await message.answer("Please enter a valid @username or @group handle.")
+        return
+    data = await state.get_data()
+    task_id: int = data["edit_task_id"]
+    uid = message.from_user.id
+    ok = await update_task_target(task_id, uid, text, force=await _is_admin(uid))
+    await state.clear()
+    if ok:
+        await message.answer(
+            f"✅ Recipient updated to <code>{text}</code> for Schedule #{task_id}.",
+            parse_mode="HTML",
+        )
+    else:
+        await message.answer(f"❌ Could not update Schedule #{task_id}.")
+
+
+@router.callback_query(F.data.startswith("preview:"))
+async def cb_preview(callback: CallbackQuery) -> None:
+    if callback.from_user is None:
+        return
+    task_id = int(callback.data.split(":")[1])  # type: ignore[union-attr]
+    await callback.answer("Generating…")
+    try:
+        text = await preview_task(task_id)
+        await callback.message.answer(  # type: ignore[union-attr]
+            f"🔍 <b>Preview (Schedule #{task_id}):</b>\n\n{text}",
+            parse_mode="HTML",
+        )
+    except ValueError as exc:
+        await callback.message.answer(f"❌ {exc}")  # type: ignore[union-attr]
+    except Exception as exc:
+        logger.exception("Preview failed for task %d", task_id)
+        await callback.message.answer(  # type: ignore[union-attr]
+            f"❌ <b>Preview failed:</b> <i>{exc}</i>", parse_mode="HTML"
+        )

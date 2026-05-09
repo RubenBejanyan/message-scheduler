@@ -382,6 +382,29 @@ async def update_task_interval(
     return True
 
 
+async def update_task_target(
+    task_id: int, user_telegram_id: int, target_username: str, force: bool = False
+) -> bool:
+    async with async_session_factory() as session:
+        task = await session.get(ScheduledTask, task_id)
+        if task is None or not task.is_active:
+            return False
+        if not force and task.user_telegram_id != user_telegram_id:
+            return False
+        task.target_username = target_username
+        await session.commit()
+    return True
+
+
+async def preview_task(task_id: int) -> str:
+    """Generate a sample message for a task without sending or recording it."""
+    async with async_session_factory() as session:
+        task = await session.get(ScheduledTask, task_id)
+        if task is None or not task.is_active:
+            raise ValueError(f"Task #{task_id} not found or inactive")
+    return await _build_message(task)
+
+
 async def update_task_messages(
     task_id: int, user_telegram_id: int, messages_json: str, force: bool = False
 ) -> bool:

@@ -31,6 +31,7 @@ def confirm_keyboard() -> InlineKeyboardMarkup:
 def task_keyboard(task_id: int, is_paused: bool) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="▶ Send now", callback_data=f"send_now:{task_id}")
+    builder.button(text="🔍 Preview", callback_data=f"preview:{task_id}")
     if is_paused:
         builder.button(text="▶ Resume", callback_data=f"resume_task:{task_id}")
     else:
@@ -38,7 +39,7 @@ def task_keyboard(task_id: int, is_paused: bool) -> InlineKeyboardMarkup:
     builder.button(text="✏️ Edit", callback_data=f"edit_task:{task_id}")
     builder.button(text="📋 History", callback_data=f"history:{task_id}")
     builder.button(text="🗑 Cancel this task", callback_data=f"cancel_task:{task_id}")
-    builder.adjust(2, 2, 1)
+    builder.adjust(2, 2, 1, 1)
     return builder.as_markup()
 
 
@@ -83,7 +84,8 @@ def edit_field_keyboard(task_id: int, message_mode: str = "ai") -> InlineKeyboar
         builder.button(text="📝 Topic", callback_data=f"edit_topic:{task_id}")
         builder.button(text="🌐 Language", callback_data=f"edit_lang:{task_id}")
     builder.button(text="⏱ Frequency", callback_data=f"edit_freq:{task_id}")
-    builder.adjust(3 if message_mode == "ai" else 2)
+    builder.button(text="📮 Recipient", callback_data=f"edit_target:{task_id}")
+    builder.adjust(2)
     return builder.as_markup()
 
 

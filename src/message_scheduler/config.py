@@ -28,5 +28,8 @@ class Settings(BaseSettings):
     max_schedules_per_user: int = 10
     max_consecutive_failures: int = 10
 
+    # Admin REST API (set to secure the /api/* endpoints; leave empty to disable auth)
+    api_key: str = ""
+
 
 settings = Settings()  # type: ignore[call-arg]

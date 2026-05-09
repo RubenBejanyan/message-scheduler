@@ -57,24 +57,20 @@ def _run_migrations(attempts: int = 5, delay: float = 4.0) -> None:
     )
 
 
-async def _health_server() -> None:
-    """Minimal HTTP server on :8080 for Docker HEALTHCHECK."""
-    async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        await reader.read(4096)
-        writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\n\r\nok")
-        await writer.drain()
-        writer.close()
-        await writer.wait_closed()
+async def _api_server() -> None:
+    import uvicorn
 
-    server = await asyncio.start_server(_handle, "0.0.0.0", 8080)
-    logger.info("Health server listening on :8080")
-    async with server:
-        await server.serve_forever()
+    from .api import create_app
+
+    config = uvicorn.Config(create_app(), host="0.0.0.0", port=8080, log_level="warning")
+    server = uvicorn.Server(config)
+    logger.info("API server starting on :8080 — docs at http://localhost:8080/api/docs")
+    await server.serve()
 
 
 async def main() -> None:
     logger.info("Starting Message Scheduler…")
-    asyncio.create_task(_health_server())
+    asyncio.create_task(_api_server())
 
     logger.info("Starting APScheduler…")
     scheduler.start()

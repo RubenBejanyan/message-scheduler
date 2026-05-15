@@ -1,5 +1,24 @@
-from aiogram.types import InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+
+def _add_nav_row(builder: InlineKeyboardBuilder, show_back: bool = True) -> None:
+    buttons: list[InlineKeyboardButton] = []
+    if show_back:
+        buttons.append(InlineKeyboardButton(text="⬅️ Back", callback_data="wizard_back"))
+    buttons.append(InlineKeyboardButton(text="❌ Cancel", callback_data="wizard_cancel"))
+    builder.row(*buttons)
+
+
+def nav_keyboard(show_back: bool = True) -> InlineKeyboardMarkup:
+    """Small navigation keyboard for text-input wizard steps."""
+    builder = InlineKeyboardBuilder()
+    if show_back:
+        builder.button(text="⬅️ Back", callback_data="wizard_back")
+    builder.button(text="❌ Cancel", callback_data="wizard_cancel")
+    builder.adjust(2 if show_back else 1)
+    return builder.as_markup()
+
 
 TIMEZONE_OPTIONS: list[tuple[str, str]] = [
     ("🌐 UTC", "UTC"),
@@ -46,6 +65,7 @@ def timezone_keyboard() -> InlineKeyboardMarkup:
     for label, tz in TIMEZONE_OPTIONS:
         builder.button(text=label, callback_data=f"tz:{tz}")
     builder.adjust(2)
+    _add_nav_row(builder)
     return builder.as_markup()
 
 
@@ -60,8 +80,8 @@ def edit_timezone_keyboard(task_id: int) -> InlineKeyboardMarkup:
 def confirm_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Confirm", callback_data="confirm_yes")
-    builder.button(text="❌ Cancel", callback_data="confirm_no")
-    builder.adjust(2)
+    builder.adjust(1)
+    _add_nav_row(builder)
     return builder.as_markup()
 
 
@@ -94,6 +114,7 @@ def randomization_keyboard() -> InlineKeyboardMarkup:
     for label, data in JITTER_OPTIONS:
         builder.button(text=label, callback_data=data)
     builder.adjust(2)
+    _add_nav_row(builder)
     return builder.as_markup()
 
 
@@ -102,6 +123,7 @@ def language_keyboard() -> InlineKeyboardMarkup:
     for label, data in LANGUAGE_OPTIONS:
         builder.button(text=label, callback_data=data)
     builder.adjust(2)
+    _add_nav_row(builder)
     return builder.as_markup()
 
 
@@ -110,6 +132,7 @@ def message_mode_keyboard() -> InlineKeyboardMarkup:
     builder.button(text="🤖 AI-generated", callback_data="mode:ai")
     builder.button(text="✍️ Exact message", callback_data="mode:exact")
     builder.adjust(2)
+    _add_nav_row(builder)
     return builder.as_markup()
 
 

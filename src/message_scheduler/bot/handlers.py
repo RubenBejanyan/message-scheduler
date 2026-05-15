@@ -116,6 +116,19 @@ def _parse_jitter_text(raw: str) -> int | None | str:
 # ── /start  /help ─────────────────────────────────────────────────────────────
 
 
+@router.message(Command("id"))
+async def cmd_id(message: Message) -> None:
+    """Reply with the current chat's ID — useful for finding a group's numeric ID."""
+    chat = message.chat
+    display = chat.title or chat.username or str(chat.id)
+    await message.answer(
+        f"Chat ID: <code>{chat.id}</code>\n"
+        f"Name: <b>{display}</b>\n"
+        f"Type: {chat.type}",
+        parse_mode="HTML",
+    )
+
+
 @router.message(Command("start"))
 async def cmd_start(message: Message) -> None:
     if message.from_user is None:
@@ -311,9 +324,10 @@ async def cmd_schedule(message: Message, state: FSMContext) -> None:
     await message.answer(
         "Step 1 — <b>Who should receive the messages?</b>\n\n"
         "Choose one of:\n"
-        "• Type <code>@username</code> — user or public group/channel\n"
-        "• Type <code>-100XXXXXXXXXX</code> — group without a @username (numeric chat ID)\n"
-        "• <b>Forward any message</b> from the target group — the bot detects it automatically",
+        "• <code>@username</code> — user or public group/channel\n"
+        "• <code>-100XXXXXXXXXX</code> — group without a @username\n\n"
+        "<i>To find a group's numeric ID: add the bot to the group "
+        "and send <code>/id</code> there.</i>",
         reply_markup=nav_keyboard(show_back=False),
         parse_mode="HTML",
     )
@@ -343,9 +357,10 @@ async def process_target_forward(message: Message, state: FSMContext) -> None:
     result = _extract_forward_chat(message)
     if result is None:
         await message.answer(
-            "Could not read the chat ID from that forward.\n"
-            "Please type the numeric ID (e.g. <code>-100123456789</code>) "
-            "or a <code>@username</code>.",
+            "Could not detect the chat ID from that forward "
+            "(only channel forwards expose the ID).\n\n"
+            "To get a group's ID: add the bot to the group and send "
+            "<code>/id</code> there, then type the ID here.",
             parse_mode="HTML",
         )
         return

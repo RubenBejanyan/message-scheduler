@@ -428,19 +428,15 @@ async def process_target_forward(message: Message, state: FSMContext, bot: Bot) 
         return
     chat_id, display = result
     target = str(chat_id)
-    error = await _check_target_accessible(bot, target)
-    if error:
-        await message.answer(
-            f"✅ Detected: <b>{display}</b> (<code>{target}</code>)\n\n"
-            f"❌ {error}\n\nPlease choose a different target.",
-            reply_markup=nav_keyboard(show_back=False),
-            parse_mode="HTML",
-        )
-        return
+    warning = await _check_target_accessible(bot, target)
+    warning_line = (
+        f"\n\n⚠️ <i>{warning}\nMake sure access is granted before the first send.</i>"
+        if warning else ""
+    )
     await state.update_data(target=target)
     await state.set_state(ScheduleForm.waiting_for_interval)
     await message.answer(
-        f"✅ Detected: <b>{display}</b> (<code>{target}</code>)\n\n"
+        f"✅ Detected: <b>{display}</b> (<code>{target}</code>){warning_line}\n\n"
         "Step 2 — <b>How often / when should I send?</b>\n\n"
         "• <code>30m</code> — every 30 minutes\n"
         "• <code>2h</code> — every 2 hours\n"
@@ -466,18 +462,15 @@ async def process_target(message: Message, state: FSMContext, bot: Bot) -> None:
             parse_mode="HTML",
         )
         return
-    error = await _check_target_accessible(bot, text)
-    if error:
-        await message.answer(
-            f"❌ {error}\n\nPlease try a different target.",
-            reply_markup=nav_keyboard(show_back=False),
-            parse_mode="HTML",
-        )
-        return
+    warning = await _check_target_accessible(bot, text)
+    warning_line = (
+        f"\n\n⚠️ <i>{warning}\nMake sure access is granted before the first send.</i>"
+        if warning else ""
+    )
     await state.update_data(target=text)
     await state.set_state(ScheduleForm.waiting_for_interval)
     await message.answer(
-        "Step 2 — <b>How often / when should I send?</b>\n\n"
+        f"Step 2 — <b>How often / when should I send?</b>{warning_line}\n\n"
         "• <code>30m</code> — every 30 minutes\n"
         "• <code>2h</code> — every 2 hours\n"
         "• <code>1d</code> — every day\n"

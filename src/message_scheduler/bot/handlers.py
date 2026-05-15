@@ -343,8 +343,9 @@ async def process_target_forward(message: Message, state: FSMContext) -> None:
     result = _extract_forward_chat(message)
     if result is None:
         await message.answer(
-            "Could not read the chat ID from that forward. "
-            "Please type the numeric ID (e.g. <code>-100123456789</code>) or a <code>@username</code>.",
+            "Could not read the chat ID from that forward.\n"
+            "Please type the numeric ID (e.g. <code>-100123456789</code>) "
+            "or a <code>@username</code>.",
             parse_mode="HTML",
         )
         return

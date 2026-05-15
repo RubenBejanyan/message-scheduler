@@ -490,8 +490,7 @@ async def process_interval(message: Message, state: FSMContext) -> None:
 
     if parsed is None:
         await message.answer(
-            "Could not parse that. Try: <code>30m</code>, <code>2h</code>, "
-            "<code>daily 09:00</code>, or <code>window 15:00-15:45</code>",
+            f"Could not parse that. Try:\n{_INTERVAL_PROMPT}",
             parse_mode="HTML",
         )
         return
@@ -525,8 +524,8 @@ async def process_interval(message: Message, state: FSMContext) -> None:
             parse_mode="HTML",
         )
     else:
-        # cron and window fire at a specific local time — ask for timezone first.
-        if interval_type == "window":
+        # cron/window/once fire at a specific local time — ask for timezone first.
+        if interval_type in ("window", "once"):
             await state.update_data(jitter_seconds=None)
         await state.set_state(ScheduleForm.waiting_for_timezone)
         await message.answer(
@@ -543,7 +542,7 @@ async def process_timezone(callback: CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
     await callback.message.edit_reply_markup()  # type: ignore[union-attr]
 
-    if data.get("interval_type") == "window":
+    if data.get("interval_type") in ("window", "once"):
         await state.set_state(ScheduleForm.waiting_for_mode)
         await callback.message.answer(  # type: ignore[union-attr]
             "Step 4 — <b>What should I send?</b>",
@@ -653,17 +652,19 @@ async def process_messages(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     await state.set_state(ScheduleForm.waiting_for_confirm)
 
+    interval_type = data.get("interval_type", "interval")
     jitter = data.get("jitter_seconds")
     jitter_line = f"• Randomization: {_jitter_label(jitter)}\n" if jitter else ""
     tz = data.get("timezone", "UTC")
-    tz_line = f"• Timezone: {tz}\n" if data.get("interval_type") != "interval" else ""
+    tz_line = f"• Timezone: {tz}\n" if interval_type != "interval" else ""
+    schedule_key = "Send time" if interval_type == "once" else "Frequency"
     preview = msgs[0][:120] + ("…" if len(msgs[0]) > 120 else "")
     count_line = f" ({len(msgs)} messages, random pick)" if len(msgs) > 1 else ""
 
     await message.answer(
         "📋 <b>Confirm your schedule:</b>\n\n"
         f"• Recipient: <code>{data['target']}</code>\n"
-        f"• Frequency: {data['interval_label']}\n"
+        f"• {schedule_key}: {data['interval_label']}\n"
         f"{tz_line}"
         f"{jitter_line}"
         f"• Mode: ✍️ Exact message{count_line}\n"
@@ -708,15 +709,17 @@ async def process_topic(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     await state.set_state(ScheduleForm.waiting_for_confirm)
 
+    interval_type = data.get("interval_type", "interval")
     jitter = data.get("jitter_seconds")
     jitter_line = f"• Randomization: {_jitter_label(jitter)}\n" if jitter else ""
     tz = data.get("timezone", "UTC")
-    tz_line = f"• Timezone: {tz}\n" if data.get("interval_type") != "interval" else ""
+    tz_line = f"• Timezone: {tz}\n" if interval_type != "interval" else ""
+    schedule_key = "Send time" if interval_type == "once" else "Frequency"
 
     await message.answer(
         "📋 <b>Confirm your schedule:</b>\n\n"
         f"• Recipient: <code>{data['target']}</code>\n"
-        f"• Frequency: {data['interval_label']}\n"
+        f"• {schedule_key}: {data['interval_label']}\n"
         f"{tz_line}"
         f"{jitter_line}"
         f"• Language: {data.get('language', 'English')}\n"
@@ -813,7 +816,8 @@ _INTERVAL_PROMPT = (
     "• <code>2h</code> — every 2 hours\n"
     "• <code>1d</code> — every day\n"
     "• <code>daily 09:00</code> — every day at 09:00 UTC\n"
-    "• <code>window 15:15-15:50</code> — daily at a random time in that range"
+    "• <code>window 15:15-15:50</code> — daily at a random time in that range\n"
+    "• <code>once 2026-05-20 14:30</code> — send once on that date and time"
 )
 
 
@@ -867,7 +871,7 @@ async def wizard_back_callback(callback: CallbackQuery, state: FSMContext) -> No
             )
 
     elif current_state == ScheduleForm.waiting_for_mode.state:
-        if interval_type == "window":
+        if interval_type in ("window", "once"):
             await state.set_state(ScheduleForm.waiting_for_timezone)
             await callback.message.answer(  # type: ignore[union-attr]
                 "Step 3 — <b>Timezone</b>\n\nWhat timezone should the schedule use?",
@@ -1222,8 +1226,7 @@ async def process_edit_interval(message: Message, state: FSMContext) -> None:
     parsed = parse_interval(text)
     if parsed is None:
         await message.answer(
-            "Could not parse that. Try: <code>30m</code>, <code>2h</code>, "
-            "<code>daily 09:00</code>, or <code>window 15:00-15:45</code>",
+            f"Could not parse that. Try:\n{_INTERVAL_PROMPT}",
             parse_mode="HTML",
         )
         return

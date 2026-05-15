@@ -4,7 +4,13 @@ import logging
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message, MessageOriginChannel, MessageOriginChat
+from aiogram.types import (
+    CallbackQuery,
+    Message,
+    MessageOriginChannel,
+    MessageOriginChat,
+    MessageOriginUser,
+)
 
 from ..config import settings
 from ..scheduler import (
@@ -114,6 +120,19 @@ def _parse_jitter_text(raw: str) -> int | None | str:
 
 
 # ── /start  /help ─────────────────────────────────────────────────────────────
+
+
+@router.message(Command("id"))
+async def cmd_id(message: Message) -> None:
+    """Reply with the current chat's ID — useful for finding a group's numeric ID."""
+    chat = message.chat
+    display = chat.title or chat.username or str(chat.id)
+    await message.answer(
+        f"Chat ID: <code>{chat.id}</code>\n"
+        f"Name: <b>{display}</b>\n"
+        f"Type: {chat.type}",
+        parse_mode="HTML",
+    )
 
 
 @router.message(Command("start"))
@@ -311,20 +330,25 @@ async def cmd_schedule(message: Message, state: FSMContext) -> None:
     await message.answer(
         "Step 1 — <b>Who should receive the messages?</b>\n\n"
         "Choose one of:\n"
-        "• Type <code>@username</code> — user or public group/channel\n"
-        "• Type <code>-100XXXXXXXXXX</code> — group without a @username (numeric chat ID)\n"
-        "• <b>Forward any message</b> from the target group — the bot detects it automatically",
+        "• <code>@username</code> — user or public group/channel\n"
+        "• <code>-100XXXXXXXXXX</code> — group without a @username\n"
+        "• <b>Forward any message</b> from the target user or channel\n\n"
+        "<i>For groups without a @username: add the bot and send "
+        "<code>/id</code> there to get the numeric ID.</i>",
         reply_markup=nav_keyboard(show_back=False),
         parse_mode="HTML",
     )
 
 
-def _extract_forward_chat(message: Message) -> tuple[int, str] | None:
-    """Return (chat_id, display_name) if the message was forwarded from a group or channel."""
-    # Legacy field — still populated by most Telegram clients
+def _extract_forward_target(message: Message) -> tuple[int, str] | None:
+    """Return (id, display_name) from a forwarded message — user, group, or channel."""
+    # Legacy fields (still sent by most clients alongside forward_origin)
     if message.forward_from_chat and message.forward_from_chat.id:
         c = message.forward_from_chat
         return c.id, c.title or c.username or str(c.id)
+    if message.forward_from and message.forward_from.id:
+        u = message.forward_from
+        return u.id, u.full_name or u.username or str(u.id)
     # Modern forward_origin (Bot API 7.0+)
     origin = message.forward_origin
     if isinstance(origin, MessageOriginChannel):
@@ -332,20 +356,27 @@ def _extract_forward_chat(message: Message) -> tuple[int, str] | None:
     if isinstance(origin, MessageOriginChat):
         c = origin.sender_chat
         return c.id, c.title or str(c.id)
+    if isinstance(origin, MessageOriginUser):
+        u = origin.sender_user
+        return u.id, u.full_name or u.username or str(u.id)
+    # MessageOriginHiddenUser — privacy settings hide the sender's identity
     return None
 
 
-@router.message(ScheduleForm.waiting_for_target, F.forward_from_chat | F.forward_origin)
+@router.message(
+    ScheduleForm.waiting_for_target,
+    F.forward_from_chat | F.forward_from | F.forward_origin,
+)
 async def process_target_forward(message: Message, state: FSMContext) -> None:
-    """Handle a message forwarded from a group/channel — auto-detect the chat ID."""
+    """Handle a forwarded message in step 1 — auto-detect user/group/channel ID."""
     if message.from_user is None or not await _is_approved(message.from_user.id):
         return
-    result = _extract_forward_chat(message)
+    result = _extract_forward_target(message)
     if result is None:
         await message.answer(
-            "Could not read the chat ID from that forward.\n"
-            "Please type the numeric ID (e.g. <code>-100123456789</code>) "
-            "or a <code>@username</code>.",
+            "Could not read the sender's ID — they have privacy settings enabled.\n\n"
+            "Ask them to send their ID directly, or use <code>/id</code> "
+            "inside the target group.",
             parse_mode="HTML",
         )
         return

@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatAction
@@ -410,6 +411,17 @@ def _extract_forward_target(message: Message) -> tuple[int, str] | None:
     return None
 
 
+def _parse_id_reply(text: str) -> tuple[int, str] | None:
+    """Parse the Chat ID from a /id command reply, e.g. 'Chat ID: -5174140215\\nName: ...'"""
+    m = re.search(r"Chat ID:\s*(-?\d+)", text)
+    if not m:
+        return None
+    chat_id = int(m.group(1))
+    name_m = re.search(r"Name:\s*(.+)", text)
+    display = name_m.group(1).strip() if name_m else str(chat_id)
+    return chat_id, display
+
+
 @router.message(
     ScheduleForm.waiting_for_target,
     F.forward_from_chat | F.forward_from | F.forward_origin,
@@ -429,6 +441,23 @@ async def process_target_forward(message: Message, state: FSMContext, bot: Bot) 
         )
         return
     chat_id, display = result
+
+    # If the forwarded message came from this bot itself (user forwarded a /id reply),
+    # parse the group ID out of the message text instead of using the bot's own ID.
+    bot_info = await bot.get_me()
+    if chat_id == bot_info.id:
+        parsed = _parse_id_reply(message.text or "")
+        if parsed:
+            chat_id, display = parsed
+        else:
+            await message.answer(
+                "⚠️ You forwarded a reply from this bot.\n\n"
+                "Copy the <b>Chat ID</b> number shown in that reply and paste it "
+                "directly as the target (e.g. <code>-5174140215</code>).",
+                reply_markup=nav_keyboard(show_back=False),
+                parse_mode="HTML",
+            )
+            return
     target = str(chat_id)
     warning = await _check_target_accessible(bot, target)
     warning_line = (

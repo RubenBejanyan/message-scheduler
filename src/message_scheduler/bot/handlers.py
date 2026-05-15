@@ -16,6 +16,7 @@ from aiogram.types import (
 
 from ..config import settings
 from ..scheduler import (
+    _resolve_target,
     cancel_task,
     count_user_tasks,
     create_task,
@@ -323,7 +324,7 @@ async def cb_revoke_admin(callback: CallbackQuery, bot: Bot) -> None:
 
 async def _check_target_accessible(bot: Bot, target: str) -> str | None:
     """Return None if the bot can message this target, or a human-readable error."""
-    chat_id: int | str = int(target) if target.lstrip("-").isdigit() else target
+    chat_id: int | str = await _resolve_target(target)
     try:
         await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
         return None

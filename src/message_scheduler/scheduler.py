@@ -13,7 +13,7 @@ from sqlalchemy import func, select, update
 from .ai_generator import generate_message
 from .config import settings
 from .database import async_session_factory
-from .models import ScheduledTask, SentMessage
+from .models import RegisteredUser, ScheduledTask, SentMessage
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,29 @@ def _resolve_chat_id(target: str) -> int | str:
     stripped = target.lstrip("-")
     if stripped.isdigit():
         return int(target)
+    return target
+
+
+async def _resolve_target(target: str) -> int | str:
+    """Resolve a target to a chat ID usable by the Bot API.
+
+    Numeric strings become int. @usernames are looked up in registered_users
+    so private Telegram users (who can't receive messages by @handle) are
+    automatically addressed by their numeric telegram_id instead.
+    """
+    if target.lstrip("-").isdigit():
+        return int(target)
+    if target.startswith("@"):
+        username = target.lstrip("@").lower()
+        async with async_session_factory() as session:
+            result = await session.execute(
+                select(RegisteredUser).where(
+                    func.lower(RegisteredUser.username) == username
+                )
+            )
+            user = result.scalar_one_or_none()
+            if user is not None:
+                return user.telegram_id
     return target
 
 
@@ -75,7 +98,8 @@ async def _execute_job(task_id: int) -> None:
         text = await _build_message(task)
         if _bot is None:
             raise RuntimeError("Bot instance not set — call set_bot() on startup")
-        await _bot.send_message(chat_id=_resolve_chat_id(task.target_username), text=text)
+        chat_id = await _resolve_target(task.target_username)
+        await _bot.send_message(chat_id=chat_id, text=text)
 
         prev_failures = task.consecutive_failures
         new_sent_count = task.sent_count + 1
@@ -184,7 +208,8 @@ async def fire_task_now(task_id: int) -> str:
     text = await _build_message(task)
     if _bot is None:
         raise RuntimeError("Bot instance not set — call set_bot() on startup")
-    await _bot.send_message(chat_id=_resolve_chat_id(task.target_username), text=text)
+    chat_id = await _resolve_target(task.target_username)
+    await _bot.send_message(chat_id=chat_id, text=text)
 
     async with async_session_factory() as session:
         await session.execute(

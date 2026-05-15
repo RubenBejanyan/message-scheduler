@@ -27,6 +27,14 @@ def set_bot(bot: Bot) -> None:
     _bot = bot
 
 
+def _resolve_chat_id(target: str) -> int | str:
+    """Return an int for numeric chat IDs (e.g. '-1001234567890'), @username string otherwise."""
+    stripped = target.lstrip("-")
+    if stripped.isdigit():
+        return int(target)
+    return target
+
+
 async def _record_sent(task: ScheduledTask, text: str) -> None:
     async with async_session_factory() as session:
         session.add(
@@ -67,7 +75,7 @@ async def _execute_job(task_id: int) -> None:
         text = await _build_message(task)
         if _bot is None:
             raise RuntimeError("Bot instance not set — call set_bot() on startup")
-        await _bot.send_message(chat_id=task.target_username, text=text)
+        await _bot.send_message(chat_id=_resolve_chat_id(task.target_username), text=text)
 
         prev_failures = task.consecutive_failures
         async with async_session_factory() as session:
@@ -147,7 +155,7 @@ async def fire_task_now(task_id: int) -> str:
     text = await _build_message(task)
     if _bot is None:
         raise RuntimeError("Bot instance not set — call set_bot() on startup")
-    await _bot.send_message(chat_id=task.target_username, text=text)
+    await _bot.send_message(chat_id=_resolve_chat_id(task.target_username), text=text)
 
     async with async_session_factory() as session:
         await session.execute(

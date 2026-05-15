@@ -47,6 +47,7 @@ from .keyboards import (
     edit_timezone_keyboard,
     language_keyboard,
     message_mode_keyboard,
+    nav_keyboard,
     randomization_keyboard,
     task_keyboard,
     timezone_keyboard,
@@ -312,6 +313,7 @@ async def cmd_schedule(message: Message, state: FSMContext) -> None:
         "Enter a Telegram @username or group @handle:\n"
         "• <code>@john_doe</code> — private user\n"
         "• <code>@my_group</code> — group or channel",
+        reply_markup=nav_keyboard(show_back=False),
         parse_mode="HTML",
     )
 
@@ -333,6 +335,7 @@ async def process_target(message: Message, state: FSMContext) -> None:
         "• <code>1d</code> — every day\n"
         "• <code>daily 09:00</code> — every day at 09:00 UTC\n"
         "• <code>window 15:15-15:50</code> — daily at a random time in that range",
+        reply_markup=nav_keyboard(),
         parse_mode="HTML",
     )
 
@@ -654,6 +657,146 @@ async def confirm_no(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
 
 
+@router.callback_query(F.data == "wizard_cancel")
+async def wizard_cancel_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    current_state = await state.get_state()
+    if current_state and current_state.startswith("ScheduleForm:"):
+        await state.clear()
+        await callback.message.edit_reply_markup()  # type: ignore[union-attr]
+        await callback.message.answer("❌ Scheduling cancelled. Use /schedule to start again.")  # type: ignore[union-attr]
+    await callback.answer()
+
+
+_INTERVAL_PROMPT = (
+    "• <code>30m</code> — every 30 minutes\n"
+    "• <code>2h</code> — every 2 hours\n"
+    "• <code>1d</code> — every day\n"
+    "• <code>daily 09:00</code> — every day at 09:00 UTC\n"
+    "• <code>window 15:15-15:50</code> — daily at a random time in that range"
+)
+
+
+@router.callback_query(F.data == "wizard_back")
+async def wizard_back_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    current_state = await state.get_state()
+    if not current_state or not current_state.startswith("ScheduleForm:"):
+        await callback.answer("No active scheduling wizard.", show_alert=True)
+        return
+
+    data = await state.get_data()
+    interval_type: str = data.get("interval_type", "interval")
+    message_mode: str = data.get("message_mode", "ai")
+
+    await callback.message.edit_reply_markup()  # type: ignore[union-attr]
+
+    if current_state == ScheduleForm.waiting_for_interval.state:
+        await state.set_state(ScheduleForm.waiting_for_target)
+        await callback.message.answer(  # type: ignore[union-attr]
+            "Step 1 — <b>Who should receive the messages?</b>\n\n"
+            "Enter a Telegram @username or group @handle:\n"
+            "• <code>@john_doe</code> — private user\n"
+            "• <code>@my_group</code> — group or channel",
+            reply_markup=nav_keyboard(show_back=False),
+            parse_mode="HTML",
+        )
+
+    elif current_state == ScheduleForm.waiting_for_timezone.state:
+        await state.set_state(ScheduleForm.waiting_for_interval)
+        await callback.message.answer(  # type: ignore[union-attr]
+            f"Step 2 — <b>How often / when should I send?</b>\n\n{_INTERVAL_PROMPT}",
+            reply_markup=nav_keyboard(),
+            parse_mode="HTML",
+        )
+
+    elif current_state == ScheduleForm.waiting_for_randomization.state:
+        if interval_type == "cron":
+            await state.set_state(ScheduleForm.waiting_for_timezone)
+            await callback.message.answer(  # type: ignore[union-attr]
+                "Step 3 — <b>Timezone</b>\n\nWhat timezone should the schedule use?",
+                reply_markup=timezone_keyboard(),
+                parse_mode="HTML",
+            )
+        else:
+            await state.set_state(ScheduleForm.waiting_for_interval)
+            await callback.message.answer(  # type: ignore[union-attr]
+                f"Step 2 — <b>How often / when should I send?</b>\n\n{_INTERVAL_PROMPT}",
+                reply_markup=nav_keyboard(),
+                parse_mode="HTML",
+            )
+
+    elif current_state == ScheduleForm.waiting_for_mode.state:
+        if interval_type == "window":
+            await state.set_state(ScheduleForm.waiting_for_timezone)
+            await callback.message.answer(  # type: ignore[union-attr]
+                "Step 3 — <b>Timezone</b>\n\nWhat timezone should the schedule use?",
+                reply_markup=timezone_keyboard(),
+                parse_mode="HTML",
+            )
+        else:
+            step = "4" if interval_type == "cron" else "3"
+            await state.set_state(ScheduleForm.waiting_for_randomization)
+            await callback.message.answer(  # type: ignore[union-attr]
+                f"Step {step} — <b>Randomization</b>\n\n"
+                "Add a random delay so messages don't always arrive at the exact same time.\n\n"
+                "Pick a preset or type a custom amount (e.g. <code>45m</code>, <code>3h</code>, "
+                "<code>90</code> for 90 minutes):",
+                reply_markup=randomization_keyboard(),
+                parse_mode="HTML",
+            )
+
+    elif current_state == ScheduleForm.waiting_for_language.state:
+        step = "5" if interval_type == "cron" else "4"
+        await state.set_state(ScheduleForm.waiting_for_mode)
+        await callback.message.answer(  # type: ignore[union-attr]
+            f"Step {step} — <b>What should I send?</b>",
+            reply_markup=message_mode_keyboard(),
+            parse_mode="HTML",
+        )
+
+    elif current_state == ScheduleForm.waiting_for_topic.state:
+        step = "6" if interval_type == "cron" else "5"
+        await state.set_state(ScheduleForm.waiting_for_language)
+        await callback.message.answer(  # type: ignore[union-attr]
+            f"Step {step} — <b>Language?</b>\n\nChoose the language for the generated messages:",
+            reply_markup=language_keyboard(),
+            parse_mode="HTML",
+        )
+
+    elif current_state == ScheduleForm.waiting_for_messages.state:
+        step = "5" if interval_type == "cron" else "4"
+        await state.set_state(ScheduleForm.waiting_for_mode)
+        await callback.message.answer(  # type: ignore[union-attr]
+            f"Step {step} — <b>What should I send?</b>",
+            reply_markup=message_mode_keyboard(),
+            parse_mode="HTML",
+        )
+
+    elif current_state == ScheduleForm.waiting_for_confirm.state:
+        if message_mode == "exact":
+            step = "6" if interval_type == "cron" else "5"
+            await state.set_state(ScheduleForm.waiting_for_messages)
+            await callback.message.answer(  # type: ignore[union-attr]
+                f"Step {step} — <b>Enter your message(s)</b>\n\n"
+                "Type one message — or multiple messages, one per line. "
+                "Each send will pick one at random.\n\n"
+                "<i>Maximum 20 messages, 4000 characters each.</i>",
+                reply_markup=nav_keyboard(),
+                parse_mode="HTML",
+            )
+        else:
+            step = "7" if interval_type == "cron" else "6"
+            await state.set_state(ScheduleForm.waiting_for_topic)
+            await callback.message.answer(  # type: ignore[union-attr]
+                f"Step {step} — <b>What should the messages be about?</b>\n\n"
+                "Describe the topic or context (e.g. <i>good morning motivation</i>, "
+                "<i>remind her to drink water</i>):",
+                reply_markup=nav_keyboard(),
+                parse_mode="HTML",
+            )
+
+    await callback.answer()
+
+
 # ── /list ────────────────────────────────────────────────────────────────────
 
 
@@ -721,12 +864,17 @@ async def cmd_list(message: Message) -> None:
 
 
 @router.message(Command("cancel"))
-async def cmd_cancel(message: Message) -> None:
+async def cmd_cancel(message: Message, state: FSMContext) -> None:
     if message.from_user is None:
         return
     if not await _is_approved(message.from_user.id):
         return
-    await message.answer("Use the 🗑 buttons in /list to cancel a specific schedule.")
+    current_state = await state.get_state()
+    if current_state and current_state.startswith("ScheduleForm:"):
+        await state.clear()
+        await message.answer("❌ Scheduling cancelled. Use /schedule to start again.")
+    else:
+        await message.answer("Use the 🗑 buttons in /list to cancel a specific schedule.")
 
 
 @router.callback_query(F.data.startswith("cancel_task:"))

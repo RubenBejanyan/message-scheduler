@@ -67,6 +67,13 @@ class ScheduledTask(Base):
         String(50), nullable=False, default="UTC", server_default="UTC"
     )
 
+    # Optional cap on total sends. None = unlimited.
+    repeat_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Total number of successful sends so far.
+    sent_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+
     consecutive_failures: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )

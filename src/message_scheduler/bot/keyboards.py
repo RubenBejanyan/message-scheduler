@@ -118,6 +118,17 @@ def randomization_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def repeat_count_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="♾ Unlimited", callback_data="repeat:0")
+    builder.button(text="5 times", callback_data="repeat:5")
+    builder.button(text="10 times", callback_data="repeat:10")
+    builder.button(text="20 times", callback_data="repeat:20")
+    builder.adjust(2)
+    _add_nav_row(builder)
+    return builder.as_markup()
+
+
 def language_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for label, data in LANGUAGE_OPTIONS:

@@ -57,6 +57,7 @@ from .keyboards import (
     message_mode_keyboard,
     nav_keyboard,
     randomization_keyboard,
+    repeat_count_keyboard,
     task_keyboard,
     timezone_keyboard,
     unblock_keyboard,
@@ -542,11 +543,22 @@ async def process_timezone(callback: CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
     await callback.message.edit_reply_markup()  # type: ignore[union-attr]
 
-    if data.get("interval_type") in ("window", "once"):
+    interval_type = data.get("interval_type")
+    if interval_type == "once":
         await state.set_state(ScheduleForm.waiting_for_mode)
         await callback.message.answer(  # type: ignore[union-attr]
             "Step 4 — <b>What should I send?</b>",
             reply_markup=message_mode_keyboard(),
+            parse_mode="HTML",
+        )
+    elif interval_type == "window":
+        await state.set_state(ScheduleForm.waiting_for_repeat_count)
+        await callback.message.answer(  # type: ignore[union-attr]
+            "Step 4 — <b>How many times?</b>\n\n"
+            "Choose how many times this message should be sent, "
+            "or pick <b>Unlimited</b> for no cap.\n\n"
+            "You can also type a custom number (e.g. <code>15</code>):",
+            reply_markup=repeat_count_keyboard(),
             parse_mode="HTML",
         )
     else:  # cron
@@ -570,10 +582,13 @@ async def process_randomization(callback: CallbackQuery, state: FSMContext) -> N
     data = await state.get_data()
     step = "5" if data.get("interval_type") == "cron" else "4"
     await callback.message.edit_reply_markup()  # type: ignore[union-attr]
-    await state.set_state(ScheduleForm.waiting_for_mode)
+    await state.set_state(ScheduleForm.waiting_for_repeat_count)
     await callback.message.answer(  # type: ignore[union-attr]
-        f"Step {step} — <b>What should I send?</b>",
-        reply_markup=message_mode_keyboard(),
+        f"Step {step} — <b>How many times?</b>\n\n"
+        "Choose how many times this message should be sent, "
+        "or pick <b>Unlimited</b> for no cap.\n\n"
+        "You can also type a custom number (e.g. <code>15</code>):",
+        reply_markup=repeat_count_keyboard(),
         parse_mode="HTML",
     )
     await callback.answer()
@@ -595,6 +610,59 @@ async def process_randomization_text(message: Message, state: FSMContext) -> Non
     await state.update_data(jitter_seconds=jitter)
     data = await state.get_data()
     step = "5" if data.get("interval_type") == "cron" else "4"
+    await state.set_state(ScheduleForm.waiting_for_repeat_count)
+    await message.answer(
+        f"Step {step} — <b>How many times?</b>\n\n"
+        "Choose how many times this message should be sent, "
+        "or pick <b>Unlimited</b> for no cap.\n\n"
+        "You can also type a custom number (e.g. <code>15</code>):",
+        reply_markup=repeat_count_keyboard(),
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(F.data.startswith("repeat:"), ScheduleForm.waiting_for_repeat_count)
+async def process_repeat_count(callback: CallbackQuery, state: FSMContext) -> None:
+    raw = int(callback.data.split(":")[1])  # type: ignore[union-attr]
+    repeat_count: int | None = raw if raw > 0 else None
+    await state.update_data(repeat_count=repeat_count)
+    data = await state.get_data()
+    interval_type = data.get("interval_type", "interval")
+    step = "6" if interval_type == "cron" else "5"
+    await callback.message.edit_reply_markup()  # type: ignore[union-attr]
+    await state.set_state(ScheduleForm.waiting_for_mode)
+    await callback.message.answer(  # type: ignore[union-attr]
+        f"Step {step} — <b>What should I send?</b>",
+        reply_markup=message_mode_keyboard(),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.message(ScheduleForm.waiting_for_repeat_count)
+async def process_repeat_count_text(message: Message, state: FSMContext) -> None:
+    if message.from_user is None or not await _is_approved(message.from_user.id):
+        return
+    raw = (message.text or "").strip()
+    if raw.lower() in ("0", "unlimited", "none", "no", "∞"):
+        repeat_count: int | None = None
+    else:
+        try:
+            n = int(raw)
+            if n <= 0:
+                raise ValueError
+            repeat_count = n
+        except ValueError:
+            await message.answer(
+                "Please enter a positive number (e.g. <code>10</code>), "
+                "or press <b>♾ Unlimited</b>.",
+                parse_mode="HTML",
+            )
+            return
+    await state.update_data(repeat_count=repeat_count)
+    data = await state.get_data()
+    interval_type = data.get("interval_type", "interval")
+    step = "6" if interval_type == "cron" else "5"
     await state.set_state(ScheduleForm.waiting_for_mode)
     await message.answer(
         f"Step {step} — <b>What should I send?</b>",
@@ -610,8 +678,13 @@ async def process_mode(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.message.edit_reply_markup()  # type: ignore[union-attr]
     data = await state.get_data()
     interval_type = data.get("interval_type", "interval")
-    # window: 4-mode → 5-content; cron: 5-mode → 6-content; interval: 4-mode → 5-content
-    step = "6" if interval_type == "cron" else "5"
+    # cron: mode(6)→content(7); once: mode(4)→content(5); interval/window: mode(5)→content(6)
+    if interval_type == "cron":
+        step = "7"
+    elif interval_type == "once":
+        step = "5"
+    else:
+        step = "6"
 
     if mode == "exact":
         await state.set_state(ScheduleForm.waiting_for_messages)
@@ -658,6 +731,8 @@ async def process_messages(message: Message, state: FSMContext) -> None:
     tz = data.get("timezone", "UTC")
     tz_line = f"• Timezone: {tz}\n" if interval_type != "interval" else ""
     schedule_key = "Send time" if interval_type == "once" else "Frequency"
+    repeat_count = data.get("repeat_count")
+    repeat_line = f"• Repeat: {repeat_count} times\n" if repeat_count else ""
     preview = msgs[0][:120] + ("…" if len(msgs[0]) > 120 else "")
     count_line = f" ({len(msgs)} messages, random pick)" if len(msgs) > 1 else ""
 
@@ -667,6 +742,7 @@ async def process_messages(message: Message, state: FSMContext) -> None:
         f"• {schedule_key}: {data['interval_label']}\n"
         f"{tz_line}"
         f"{jitter_line}"
+        f"{repeat_line}"
         f"• Mode: ✍️ Exact message{count_line}\n"
         f"• Preview: <i>{preview}</i>\n\n"
         f"Ready to activate?{_BOT_SEND_NOTICE}",
@@ -682,10 +758,14 @@ async def process_language(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.message.edit_reply_markup()  # type: ignore[union-attr]
 
     data = await state.get_data()
-    # interval: rand(3) mode(4) lang(5) → topic(6)
-    # window:   tz(3)   mode(4) lang(5) → topic(6)
-    # cron:     tz(3)   rand(4) mode(5) lang(6) → topic(7)
-    step = "7" if data.get("interval_type") == "cron" else "6"
+    # cron: lang(7)→topic(8); once: lang(5)→topic(6); interval/window: lang(6)→topic(7)
+    interval_type = data.get("interval_type", "interval")
+    if interval_type == "cron":
+        step = "8"
+    elif interval_type == "once":
+        step = "6"
+    else:
+        step = "7"
     await state.set_state(ScheduleForm.waiting_for_topic)
     await callback.message.answer(  # type: ignore[union-attr]
         f"Step {step} — <b>What should the messages be about?</b>\n\n"
@@ -715,6 +795,8 @@ async def process_topic(message: Message, state: FSMContext) -> None:
     tz = data.get("timezone", "UTC")
     tz_line = f"• Timezone: {tz}\n" if interval_type != "interval" else ""
     schedule_key = "Send time" if interval_type == "once" else "Frequency"
+    repeat_count = data.get("repeat_count")
+    repeat_line = f"• Repeat: {repeat_count} times\n" if repeat_count else ""
 
     await message.answer(
         "📋 <b>Confirm your schedule:</b>\n\n"
@@ -722,6 +804,7 @@ async def process_topic(message: Message, state: FSMContext) -> None:
         f"• {schedule_key}: {data['interval_label']}\n"
         f"{tz_line}"
         f"{jitter_line}"
+        f"{repeat_line}"
         f"• Language: {data.get('language', 'English')}\n"
         f"• Topic: <i>{topic}</i>\n\n"
         f"Ready to activate?{_BOT_SEND_NOTICE}",
@@ -751,6 +834,7 @@ async def confirm_yes(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.message.edit_reply_markup()  # type: ignore[union-attr]
 
     jitter: int | None = data.get("jitter_seconds")
+    repeat_count: int | None = data.get("repeat_count")
     interval_label = data["interval_label"]
     if jitter:
         interval_label += f" ({_jitter_label(jitter)} randomization)"
@@ -779,11 +863,14 @@ async def confirm_yes(callback: CallbackQuery, state: FSMContext) -> None:
             message_mode=mode,
             messages_json=messages_json,
             timezone=data.get("timezone", "UTC"),
+            repeat_count=repeat_count,
         )
         mode_label = "✍️ exact" if mode == "exact" else f"🤖 AI · {task.language}"
+        repeat_suffix = f" · up to {repeat_count}×" if repeat_count else ""
         await callback.message.answer(  # type: ignore[union-attr]
             f"✅ Schedule created! (ID: <code>{task.id}</code>)\n"
-            f"Sending to {task.target_username} — {task.interval_label} — {mode_label}.",
+            f"Sending to {task.target_username} — {task.interval_label}"
+            f"{repeat_suffix} — {mode_label}.",
             parse_mode="HTML",
         )
     except Exception:
@@ -870,15 +957,15 @@ async def wizard_back_callback(callback: CallbackQuery, state: FSMContext) -> No
                 parse_mode="HTML",
             )
 
-    elif current_state == ScheduleForm.waiting_for_mode.state:
-        if interval_type in ("window", "once"):
+    elif current_state == ScheduleForm.waiting_for_repeat_count.state:
+        if interval_type == "window":
             await state.set_state(ScheduleForm.waiting_for_timezone)
             await callback.message.answer(  # type: ignore[union-attr]
                 "Step 3 — <b>Timezone</b>\n\nWhat timezone should the schedule use?",
                 reply_markup=timezone_keyboard(),
                 parse_mode="HTML",
             )
-        else:
+        else:  # interval or cron
             step = "4" if interval_type == "cron" else "3"
             await state.set_state(ScheduleForm.waiting_for_randomization)
             await callback.message.answer(  # type: ignore[union-attr]
@@ -890,8 +977,33 @@ async def wizard_back_callback(callback: CallbackQuery, state: FSMContext) -> No
                 parse_mode="HTML",
             )
 
+    elif current_state == ScheduleForm.waiting_for_mode.state:
+        if interval_type == "once":
+            await state.set_state(ScheduleForm.waiting_for_timezone)
+            await callback.message.answer(  # type: ignore[union-attr]
+                "Step 3 — <b>Timezone</b>\n\nWhat timezone should the schedule use?",
+                reply_markup=timezone_keyboard(),
+                parse_mode="HTML",
+            )
+        else:
+            step = "5" if interval_type == "cron" else "4"
+            await state.set_state(ScheduleForm.waiting_for_repeat_count)
+            await callback.message.answer(  # type: ignore[union-attr]
+                f"Step {step} — <b>How many times?</b>\n\n"
+                "Choose how many times this message should be sent, "
+                "or pick <b>Unlimited</b> for no cap.\n\n"
+                "You can also type a custom number (e.g. <code>15</code>):",
+                reply_markup=repeat_count_keyboard(),
+                parse_mode="HTML",
+            )
+
     elif current_state == ScheduleForm.waiting_for_language.state:
-        step = "5" if interval_type == "cron" else "4"
+        if interval_type == "cron":
+            step = "6"
+        elif interval_type == "once":
+            step = "4"
+        else:
+            step = "5"
         await state.set_state(ScheduleForm.waiting_for_mode)
         await callback.message.answer(  # type: ignore[union-attr]
             f"Step {step} — <b>What should I send?</b>",
@@ -900,7 +1012,12 @@ async def wizard_back_callback(callback: CallbackQuery, state: FSMContext) -> No
         )
 
     elif current_state == ScheduleForm.waiting_for_topic.state:
-        step = "6" if interval_type == "cron" else "5"
+        if interval_type == "cron":
+            step = "7"
+        elif interval_type == "once":
+            step = "5"
+        else:
+            step = "6"
         await state.set_state(ScheduleForm.waiting_for_language)
         await callback.message.answer(  # type: ignore[union-attr]
             f"Step {step} — <b>Language?</b>\n\nChoose the language for the generated messages:",
@@ -909,7 +1026,12 @@ async def wizard_back_callback(callback: CallbackQuery, state: FSMContext) -> No
         )
 
     elif current_state == ScheduleForm.waiting_for_messages.state:
-        step = "5" if interval_type == "cron" else "4"
+        if interval_type == "cron":
+            step = "6"
+        elif interval_type == "once":
+            step = "4"
+        else:
+            step = "5"
         await state.set_state(ScheduleForm.waiting_for_mode)
         await callback.message.answer(  # type: ignore[union-attr]
             f"Step {step} — <b>What should I send?</b>",
@@ -919,7 +1041,12 @@ async def wizard_back_callback(callback: CallbackQuery, state: FSMContext) -> No
 
     elif current_state == ScheduleForm.waiting_for_confirm.state:
         if message_mode == "exact":
-            step = "6" if interval_type == "cron" else "5"
+            if interval_type == "cron":
+                step = "7"
+            elif interval_type == "once":
+                step = "5"
+            else:
+                step = "6"
             await state.set_state(ScheduleForm.waiting_for_messages)
             await callback.message.answer(  # type: ignore[union-attr]
                 f"Step {step} — <b>Enter your message(s)</b>\n\n"
@@ -930,7 +1057,12 @@ async def wizard_back_callback(callback: CallbackQuery, state: FSMContext) -> No
                 parse_mode="HTML",
             )
         else:
-            step = "7" if interval_type == "cron" else "6"
+            if interval_type == "cron":
+                step = "8"
+            elif interval_type == "once":
+                step = "6"
+            else:
+                step = "7"
             await state.set_state(ScheduleForm.waiting_for_topic)
             await callback.message.answer(  # type: ignore[union-attr]
                 f"Step {step} — <b>What should the messages be about?</b>\n\n"
@@ -983,6 +1115,11 @@ async def cmd_list(message: Message) -> None:
         tz_line = (
             f"• Timezone: {task.timezone}\n" if task.interval_type != "interval" else ""
         )
+        progress_line = (
+            f"• Progress: {task.sent_count} / {task.repeat_count} sent\n"
+            if task.repeat_count
+            else ""
+        )
         if task.message_mode == "exact":
             mode_line = "• Mode: ✍️ Exact message\n"
             content_line = f"• Preview: <i>{task.topic[:80]}</i>\n"
@@ -995,6 +1132,7 @@ async def cmd_list(message: Message) -> None:
             f"• To: <code>{task.target_username}</code>\n"
             f"• Frequency: {task.interval_label}\n"
             f"{tz_line}"
+            f"{progress_line}"
             f"{mode_line}"
             f"{content_line}"
             f"• Last sent: {last}\n"

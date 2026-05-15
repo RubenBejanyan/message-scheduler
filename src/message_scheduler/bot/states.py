@@ -6,6 +6,7 @@ class ScheduleForm(StatesGroup):
     waiting_for_interval = State()
     waiting_for_timezone = State()
     waiting_for_randomization = State()
+    waiting_for_repeat_count = State()
     waiting_for_mode = State()
     waiting_for_language = State()
     waiting_for_topic = State()

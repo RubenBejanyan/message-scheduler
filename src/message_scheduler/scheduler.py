@@ -78,6 +78,7 @@ async def _execute_job(task_id: int) -> None:
         await _bot.send_message(chat_id=_resolve_chat_id(task.target_username), text=text)
 
         prev_failures = task.consecutive_failures
+        new_sent_count = task.sent_count + 1
         async with async_session_factory() as session:
             await session.execute(
                 update(ScheduledTask)
@@ -86,6 +87,7 @@ async def _execute_job(task_id: int) -> None:
                     last_sent_at=datetime.now(tz=UTC),
                     consecutive_failures=0,
                     last_error=None,
+                    sent_count=new_sent_count,
                 )
             )
             await session.commit()
@@ -93,7 +95,11 @@ async def _execute_job(task_id: int) -> None:
         await _record_sent(task, text)
         logger.info("Job %s: sent to %s", task.job_id, task.target_username)
 
-        if task.interval_type == "once":
+        repeat_exhausted = (
+            task.repeat_count is not None and new_sent_count >= task.repeat_count
+        )
+
+        if task.interval_type == "once" or repeat_exhausted:
             async with async_session_factory() as session:
                 await session.execute(
                     update(ScheduledTask)
@@ -101,12 +107,21 @@ async def _execute_job(task_id: int) -> None:
                     .values(is_active=False)
                 )
                 await session.commit()
+            if scheduler.get_job(task.job_id):
+                scheduler.remove_job(task.job_id)
             if task.user_telegram_id:
-                await _notify_owner(
-                    task.user_telegram_id,
-                    f"✅ <b>One-time message delivered</b> (Schedule #{task_id})\n"
-                    f"Sent to <code>{task.target_username}</code>. Task is now complete.",
-                )
+                if task.interval_type == "once":
+                    completion_msg = (
+                        f"✅ <b>One-time message delivered</b> (Schedule #{task_id})\n"
+                        f"Sent to <code>{task.target_username}</code>. Task is now complete."
+                    )
+                else:
+                    completion_msg = (
+                        f"✅ <b>Schedule #{task_id} completed</b>\n"
+                        f"All {task.repeat_count} messages sent to "
+                        f"<code>{task.target_username}</code>. Task is now complete."
+                    )
+                await _notify_owner(task.user_telegram_id, completion_msg)
         elif task.user_telegram_id:
             if prev_failures > 0:
                 msg = (
@@ -278,6 +293,7 @@ async def create_task(
     message_mode: str = "ai",
     messages_json: str | None = None,
     timezone: str = "UTC",
+    repeat_count: int | None = None,
 ) -> ScheduledTask:
     """Persist a new scheduled task and register it with APScheduler."""
     job_id = f"task_{uuid.uuid4().hex[:12]}"
@@ -294,6 +310,7 @@ async def create_task(
         message_mode=message_mode,
         messages_json=messages_json,
         timezone=timezone,
+        repeat_count=repeat_count,
         job_id=job_id,
         is_active=True,
     )

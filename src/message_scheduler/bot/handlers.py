@@ -4,7 +4,7 @@ import logging
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, Message, MessageOriginChannel, MessageOriginChat
 
 from ..config import settings
 from ..scheduler import (
@@ -310,10 +310,58 @@ async def cmd_schedule(message: Message, state: FSMContext) -> None:
     await state.set_state(ScheduleForm.waiting_for_target)
     await message.answer(
         "Step 1 — <b>Who should receive the messages?</b>\n\n"
-        "Enter a Telegram @username or group @handle:\n"
-        "• <code>@john_doe</code> — private user\n"
-        "• <code>@my_group</code> — group or channel",
+        "Choose one of:\n"
+        "• Type <code>@username</code> — user or public group/channel\n"
+        "• Type <code>-100XXXXXXXXXX</code> — group without a @username (numeric chat ID)\n"
+        "• <b>Forward any message</b> from the target group — the bot detects it automatically",
         reply_markup=nav_keyboard(show_back=False),
+        parse_mode="HTML",
+    )
+
+
+def _extract_forward_chat(message: Message) -> tuple[int, str] | None:
+    """Return (chat_id, display_name) if the message was forwarded from a group or channel."""
+    # Legacy field — still populated by most Telegram clients
+    if message.forward_from_chat and message.forward_from_chat.id:
+        c = message.forward_from_chat
+        return c.id, c.title or c.username or str(c.id)
+    # Modern forward_origin (Bot API 7.0+)
+    origin = message.forward_origin
+    if isinstance(origin, MessageOriginChannel):
+        return origin.chat.id, origin.chat.title or origin.chat.username or str(origin.chat.id)
+    if isinstance(origin, MessageOriginChat):
+        c = origin.sender_chat
+        return c.id, c.title or str(c.id)
+    return None
+
+
+@router.message(ScheduleForm.waiting_for_target, F.forward_from_chat | F.forward_origin)
+async def process_target_forward(message: Message, state: FSMContext) -> None:
+    """Handle a message forwarded from a group/channel — auto-detect the chat ID."""
+    if message.from_user is None or not await _is_approved(message.from_user.id):
+        return
+    result = _extract_forward_chat(message)
+    if result is None:
+        await message.answer(
+            "Could not read the chat ID from that forward.\n"
+            "Please type the numeric ID (e.g. <code>-100123456789</code>) "
+            "or a <code>@username</code>.",
+            parse_mode="HTML",
+        )
+        return
+    chat_id, display = result
+    target = str(chat_id)
+    await state.update_data(target=target)
+    await state.set_state(ScheduleForm.waiting_for_interval)
+    await message.answer(
+        f"✅ Detected: <b>{display}</b> (<code>{target}</code>)\n\n"
+        "Step 2 — <b>How often / when should I send?</b>\n\n"
+        "• <code>30m</code> — every 30 minutes\n"
+        "• <code>2h</code> — every 2 hours\n"
+        "• <code>1d</code> — every day\n"
+        "• <code>daily 09:00</code> — every day at 09:00 UTC\n"
+        "• <code>window 15:15-15:50</code> — daily at a random time in that range",
+        reply_markup=nav_keyboard(),
         parse_mode="HTML",
     )
 
@@ -323,8 +371,14 @@ async def process_target(message: Message, state: FSMContext) -> None:
     if message.from_user is None or not await _is_approved(message.from_user.id):
         return
     text = (message.text or "").strip()
-    if not text.startswith("@") or len(text) < 2:
-        await message.answer("Please enter a valid @username or @group handle.")
+    is_username = text.startswith("@") and len(text) >= 2
+    is_numeric = len(text) > 1 and text.lstrip("-").isdigit()
+    if not is_username and not is_numeric:
+        await message.answer(
+            "Please enter a valid <code>@username</code>, numeric chat ID "
+            "(e.g. <code>-100123456789</code>), or forward any message from the target group.",
+            parse_mode="HTML",
+        )
         return
     await state.update_data(target=text)
     await state.set_state(ScheduleForm.waiting_for_interval)
@@ -693,9 +747,10 @@ async def wizard_back_callback(callback: CallbackQuery, state: FSMContext) -> No
         await state.set_state(ScheduleForm.waiting_for_target)
         await callback.message.answer(  # type: ignore[union-attr]
             "Step 1 — <b>Who should receive the messages?</b>\n\n"
-            "Enter a Telegram @username or group @handle:\n"
-            "• <code>@john_doe</code> — private user\n"
-            "• <code>@my_group</code> — group or channel",
+            "Choose one of:\n"
+            "• Type <code>@username</code> — user or public group/channel\n"
+            "• Type <code>-100XXXXXXXXXX</code> — group without a @username (numeric chat ID)\n"
+            "• <b>Forward any message</b> from the target group — the bot detects it automatically",
             reply_markup=nav_keyboard(show_back=False),
             parse_mode="HTML",
         )

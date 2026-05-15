@@ -2,6 +2,8 @@ import json
 import logging
 
 from aiogram import Bot, F, Router
+from aiogram.enums import ChatAction
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
@@ -315,6 +317,49 @@ async def cb_revoke_admin(callback: CallbackQuery, bot: Bot) -> None:
     await callback.answer()
 
 
+# ── Target accessibility check ────────────────────────────────────────────────
+
+
+async def _check_target_accessible(bot: Bot, target: str) -> str | None:
+    """Return None if the bot can message this target, or a human-readable error."""
+    chat_id: int | str = int(target) if target.lstrip("-").isdigit() else target
+    try:
+        await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        return None
+    except TelegramForbiddenError:
+        # Try to get chat info for a more specific error message
+        try:
+            chat = await bot.get_chat(chat_id)
+            if chat.type in ("group", "supergroup", "channel"):
+                return (
+                    f"The bot is not a member of <b>{chat.title}</b>.\n"
+                    "Add the bot to the group/channel first, then try again."
+                )
+            name = chat.full_name or str(chat.id)
+            return (
+                f"<b>{name}</b> hasn't started a conversation with this bot.\n"
+                "They need to send /start to the bot first."
+            )
+        except Exception:
+            pass
+        if isinstance(chat_id, int) and chat_id < 0:
+            return (
+                "The bot is not a member of that group/channel.\n"
+                "Add the bot first, then try again."
+            )
+        return (
+            f"Cannot send to <code>{target}</code>.\n"
+            "If it's a user, they need to send /start to this bot first."
+        )
+    except TelegramBadRequest:
+        return (
+            f"Could not find <code>{target}</code>.\n"
+            "Check the username or ID is correct."
+        )
+    except Exception:
+        return None  # Transient error — don't block the user
+
+
 # ── /schedule wizard ──────────────────────────────────────────────────────────
 
 
@@ -367,7 +412,7 @@ def _extract_forward_target(message: Message) -> tuple[int, str] | None:
     ScheduleForm.waiting_for_target,
     F.forward_from_chat | F.forward_from | F.forward_origin,
 )
-async def process_target_forward(message: Message, state: FSMContext) -> None:
+async def process_target_forward(message: Message, state: FSMContext, bot: Bot) -> None:
     """Handle a forwarded message in step 1 — auto-detect user/group/channel ID."""
     if message.from_user is None or not await _is_approved(message.from_user.id):
         return
@@ -377,11 +422,21 @@ async def process_target_forward(message: Message, state: FSMContext) -> None:
             "Could not read the sender's ID — they have privacy settings enabled.\n\n"
             "Ask them to send their ID directly, or use <code>/id</code> "
             "inside the target group.",
+            reply_markup=nav_keyboard(show_back=False),
             parse_mode="HTML",
         )
         return
     chat_id, display = result
     target = str(chat_id)
+    error = await _check_target_accessible(bot, target)
+    if error:
+        await message.answer(
+            f"✅ Detected: <b>{display}</b> (<code>{target}</code>)\n\n"
+            f"❌ {error}\n\nPlease choose a different target.",
+            reply_markup=nav_keyboard(show_back=False),
+            parse_mode="HTML",
+        )
+        return
     await state.update_data(target=target)
     await state.set_state(ScheduleForm.waiting_for_interval)
     await message.answer(
@@ -398,7 +453,7 @@ async def process_target_forward(message: Message, state: FSMContext) -> None:
 
 
 @router.message(ScheduleForm.waiting_for_target)
-async def process_target(message: Message, state: FSMContext) -> None:
+async def process_target(message: Message, state: FSMContext, bot: Bot) -> None:
     if message.from_user is None or not await _is_approved(message.from_user.id):
         return
     text = (message.text or "").strip()
@@ -407,7 +462,15 @@ async def process_target(message: Message, state: FSMContext) -> None:
     if not is_username and not is_numeric:
         await message.answer(
             "Please enter a valid <code>@username</code>, numeric chat ID "
-            "(e.g. <code>-100123456789</code>), or forward any message from the target group.",
+            "(e.g. <code>-100123456789</code>), or forward any message from the target.",
+            parse_mode="HTML",
+        )
+        return
+    error = await _check_target_accessible(bot, text)
+    if error:
+        await message.answer(
+            f"❌ {error}\n\nPlease try a different target.",
+            reply_markup=nav_keyboard(show_back=False),
             parse_mode="HTML",
         )
         return

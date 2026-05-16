@@ -1,6 +1,7 @@
 from fastapi import Depends, FastAPI
 from sqlalchemy import func, select
 
+from ..admin import setup_admin
 from ..database import async_session_factory
 from ..models import RegisteredUser, ScheduledTask, SentMessage
 from .deps import require_api_key
@@ -78,4 +79,5 @@ def create_app() -> FastAPI:
 
     app.include_router(schedules_router)
     app.include_router(users_router)
+    setup_admin(app)
     return app

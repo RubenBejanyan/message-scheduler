@@ -15,6 +15,7 @@ dependencies = [
     "fastapi>=0.136.1",
     "uvicorn>=0.46.0",
     "sqladmin>=0.25.0",
+    "itsdangerous>=2.2.0",
 ]
 
 [build-system]

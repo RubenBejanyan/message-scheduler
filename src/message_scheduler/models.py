@@ -76,6 +76,11 @@ class ScheduledTask(Base):
     # e.g. '["@chan2", "-1009876543"]'
     extra_targets: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Quiet-hours window: skip sends when local time falls in [blackout_start, blackout_end).
+    # Stored as "HH:MM". Overnight windows (e.g. 23:00–08:00) are supported.
+    blackout_start: Mapped[str | None] = mapped_column(String(5), nullable=True)
+    blackout_end: Mapped[str | None] = mapped_column(String(5), nullable=True)
+
     # Optional cap on total sends. None = unlimited.
     repeat_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Total number of successful sends so far.

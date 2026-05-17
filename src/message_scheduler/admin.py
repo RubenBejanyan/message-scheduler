@@ -72,6 +72,8 @@ class ScheduleAdmin(ModelView, model=ScheduledTask):
         ScheduledTask.sent_count,
         ScheduledTask.repeat_count,
         ScheduledTask.media_type,
+        ScheduledTask.blackout_start,
+        ScheduledTask.blackout_end,
         ScheduledTask.consecutive_failures,
         ScheduledTask.last_sent_at,
         ScheduledTask.created_at,

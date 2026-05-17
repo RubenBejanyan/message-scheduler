@@ -114,8 +114,17 @@ async def _execute_job(task_id: int) -> None:
         text = await _build_message(task)
         if _bot is None:
             raise RuntimeError("Bot instance not set — call set_bot() on startup")
-        chat_id = await _resolve_target(task.target_username)
-        await _send_content(_bot, chat_id, task, text)
+
+        all_targets = [task.target_username]
+        if task.extra_targets:
+            all_targets += json.loads(task.extra_targets)
+
+        for tgt in all_targets:
+            try:
+                chat_id = await _resolve_target(tgt)
+                await _send_content(_bot, chat_id, task, text)
+            except Exception as tgt_exc:
+                logger.warning("Job %s: failed to send to %s — %s", task.job_id, tgt, tgt_exc)
 
         prev_failures = task.consecutive_failures
         new_sent_count = task.sent_count + 1
@@ -224,8 +233,12 @@ async def fire_task_now(task_id: int) -> str:
     text = await _build_message(task)
     if _bot is None:
         raise RuntimeError("Bot instance not set — call set_bot() on startup")
-    chat_id = await _resolve_target(task.target_username)
-    await _send_content(_bot, chat_id, task, text)
+    all_targets = [task.target_username]
+    if task.extra_targets:
+        all_targets += json.loads(task.extra_targets)
+    for tgt in all_targets:
+        chat_id = await _resolve_target(tgt)
+        await _send_content(_bot, chat_id, task, text)
 
     async with async_session_factory() as session:
         await session.execute(
@@ -337,6 +350,7 @@ async def create_task(
     repeat_count: int | None = None,
     media_type: str | None = None,
     media_file_id: str | None = None,
+    extra_targets: str | None = None,
 ) -> ScheduledTask:
     """Persist a new scheduled task and register it with APScheduler."""
     job_id = f"task_{uuid.uuid4().hex[:12]}"
@@ -356,6 +370,7 @@ async def create_task(
         repeat_count=repeat_count,
         media_type=media_type,
         media_file_id=media_file_id,
+        extra_targets=extra_targets,
         job_id=job_id,
         is_active=True,
     )

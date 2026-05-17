@@ -72,6 +72,10 @@ class ScheduledTask(Base):
     # Telegram file_id for the media to send; only set when media_type is not None.
     media_file_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
+    # JSON list of additional target strings beyond the primary target_username.
+    # e.g. '["@chan2", "-1009876543"]'
+    extra_targets: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     # Optional cap on total sends. None = unlimited.
     repeat_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Total number of successful sends so far.

@@ -58,6 +58,7 @@ from .keyboards import (
     language_keyboard,
     media_type_keyboard,
     message_mode_keyboard,
+    more_targets_keyboard,
     nav_keyboard,
     randomization_keyboard,
     repeat_count_keyboard,
@@ -82,6 +83,13 @@ def _jitter_label(seconds: int) -> str:
         return _JITTER_LABELS[seconds]
     minutes = seconds // 60
     return f"±{minutes} min" if minutes else f"±{seconds}s"
+
+def _recipients_line(data: dict) -> str:  # type: ignore[type-arg]
+    targets: list[str] = list(data.get("targets") or [data.get("target", "?")])
+    label = "Recipients" if len(targets) > 1 else "Recipient"
+    joined = ", ".join(f"<code>{t}</code>" for t in targets)
+    return f"• {label}: {joined}\n"
+
 
 _BOT_SEND_NOTICE = (
     "\n\n<i>ℹ️ Messages are sent from the bot account. "
@@ -462,20 +470,21 @@ async def process_target_forward(message: Message, state: FSMContext, bot: Bot) 
     target = str(chat_id)
     warning = await _check_target_accessible(bot, target)
     warning_line = (
-        f"\n\n⚠️ <i>{warning}\nMake sure access is granted before the first send.</i>"
+        f"⚠️ <i>{warning}\nMake sure access is granted before the first send.</i>\n\n"
         if warning else ""
     )
-    await state.update_data(target=target)
-    await state.set_state(ScheduleForm.waiting_for_interval)
+    data = await state.get_data()
+    targets: list[str] = list(data.get("targets") or [])
+    targets.append(target)
+    await state.update_data(targets=targets, target=targets[0])
+    await state.set_state(ScheduleForm.waiting_for_more_targets)
+    targets_display = ", ".join(f"<code>{t}</code>" for t in targets)
     await message.answer(
-        f"✅ Detected: <b>{display}</b> (<code>{target}</code>){warning_line}\n\n"
-        "Step 2 — <b>How often / when should I send?</b>\n\n"
-        "• <code>30m</code> — every 30 minutes\n"
-        "• <code>2h</code> — every 2 hours\n"
-        "• <code>1d</code> — every day\n"
-        "• <code>daily 09:00</code> — every day at 09:00 UTC\n"
-        "• <code>window 15:15-15:50</code> — daily at a random time in that range",
-        reply_markup=nav_keyboard(),
+        f"✅ Detected: <b>{display}</b> (<code>{target}</code>)\n\n"
+        f"{warning_line}"
+        f"<b>Target(s) so far:</b> {targets_display}\n\n"
+        "Add another recipient or continue to the next step?",
+        reply_markup=more_targets_keyboard(len(targets)),
         parse_mode="HTML",
     )
 
@@ -496,21 +505,53 @@ async def process_target(message: Message, state: FSMContext, bot: Bot) -> None:
         return
     warning = await _check_target_accessible(bot, text)
     warning_line = (
-        f"\n\n⚠️ <i>{warning}\nMake sure access is granted before the first send.</i>"
+        f"⚠️ <i>{warning}\nMake sure access is granted before the first send.</i>\n\n"
         if warning else ""
     )
-    await state.update_data(target=text)
-    await state.set_state(ScheduleForm.waiting_for_interval)
+    data = await state.get_data()
+    targets = list(data.get("targets") or [])
+    targets.append(text)
+    await state.update_data(targets=targets, target=targets[0])
+    await state.set_state(ScheduleForm.waiting_for_more_targets)
+    targets_display = ", ".join(f"<code>{t}</code>" for t in targets)
     await message.answer(
-        f"Step 2 — <b>How often / when should I send?</b>{warning_line}\n\n"
-        "• <code>30m</code> — every 30 minutes\n"
-        "• <code>2h</code> — every 2 hours\n"
-        "• <code>1d</code> — every day\n"
-        "• <code>daily 09:00</code> — every day at 09:00 UTC\n"
-        "• <code>window 15:15-15:50</code> — daily at a random time in that range",
+        f"✅ Added: <code>{text}</code>\n\n"
+        f"{warning_line}"
+        f"<b>Target(s) so far:</b> {targets_display}\n\n"
+        "Add another recipient or continue to the next step?",
+        reply_markup=more_targets_keyboard(len(targets)),
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(F.data == "more_targets_add", ScheduleForm.waiting_for_more_targets)
+async def cb_more_targets_add(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.message.edit_reply_markup()  # type: ignore[union-attr]
+    data = await state.get_data()
+    targets: list[str] = list(data.get("targets") or [])
+    n = len(targets) + 1
+    await state.set_state(ScheduleForm.waiting_for_target)
+    await callback.message.answer(  # type: ignore[union-attr]
+        f"Target #{n} — <b>Who else should receive the messages?</b>\n\n"
+        "• <code>@username</code> — user or public group/channel\n"
+        "• <code>-100XXXXXXXXXX</code> — numeric chat ID\n"
+        "• <b>Forward any message</b> from the target",
         reply_markup=nav_keyboard(),
         parse_mode="HTML",
     )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "more_targets_done", ScheduleForm.waiting_for_more_targets)
+async def cb_more_targets_done(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.message.edit_reply_markup()  # type: ignore[union-attr]
+    await state.set_state(ScheduleForm.waiting_for_interval)
+    await callback.message.answer(  # type: ignore[union-attr]
+        f"Step 2 — <b>How often / when should I send?</b>\n\n{_INTERVAL_PROMPT}",
+        reply_markup=nav_keyboard(),
+        parse_mode="HTML",
+    )
+    await callback.answer()
 
 
 @router.message(ScheduleForm.waiting_for_interval)
@@ -820,7 +861,7 @@ async def process_media_upload(message: Message, state: FSMContext) -> None:
 
     await message.answer(
         "📋 <b>Confirm your schedule:</b>\n\n"
-        f"• Recipient: <code>{data['target']}</code>\n"
+        f"{_recipients_line(data)}"
         f"• {schedule_key}: {data['interval_label']}\n"
         f"{tz_line}"
         f"{jitter_line}"
@@ -865,7 +906,7 @@ async def process_messages(message: Message, state: FSMContext) -> None:
 
     await message.answer(
         "📋 <b>Confirm your schedule:</b>\n\n"
-        f"• Recipient: <code>{data['target']}</code>\n"
+        f"{_recipients_line(data)}"
         f"• {schedule_key}: {data['interval_label']}\n"
         f"{tz_line}"
         f"{jitter_line}"
@@ -927,7 +968,7 @@ async def process_topic(message: Message, state: FSMContext) -> None:
 
     await message.answer(
         "📋 <b>Confirm your schedule:</b>\n\n"
-        f"• Recipient: <code>{data['target']}</code>\n"
+        f"{_recipients_line(data)}"
         f"• {schedule_key}: {data['interval_label']}\n"
         f"{tz_line}"
         f"{jitter_line}"
@@ -984,10 +1025,14 @@ async def confirm_yes(callback: CallbackQuery, state: FSMContext) -> None:
         topic = data["topic"]
         language = data.get("language", "English")
 
+    all_targets: list[str] = list(data.get("targets") or [data["target"]])
+    extra = all_targets[1:] if len(all_targets) > 1 else []
+    extra_targets_json: str | None = json.dumps(extra, ensure_ascii=False) if extra else None
+
     try:
         task = await create_task(
             user_telegram_id=uid,
-            target_username=data["target"],
+            target_username=all_targets[0],
             topic=topic,
             interval_type=data["interval_type"],
             interval_value=data["interval_value"],
@@ -1000,6 +1045,7 @@ async def confirm_yes(callback: CallbackQuery, state: FSMContext) -> None:
             repeat_count=repeat_count,
             media_type=media_type if is_media else None,
             media_file_id=media_file_id,
+            extra_targets=extra_targets_json,
         )
         if mode == "exact" and media_type and media_type != "text":
             emoji = _MEDIA_EMOJI.get(media_type, "📎")
@@ -1007,9 +1053,10 @@ async def confirm_yes(callback: CallbackQuery, state: FSMContext) -> None:
         else:
             mode_label = "✍️ exact" if mode == "exact" else f"🤖 AI · {task.language}"
         repeat_suffix = f" · up to {repeat_count}×" if repeat_count else ""
+        targets_str = ", ".join(all_targets)
         await callback.message.answer(  # type: ignore[union-attr]
             f"✅ Schedule created! (ID: <code>{task.id}</code>)\n"
-            f"Sending to {task.target_username} — {task.interval_label}"
+            f"Sending to {targets_str} — {task.interval_label}"
             f"{repeat_suffix} — {mode_label}.",
             parse_mode="HTML",
         )
@@ -1062,16 +1109,39 @@ async def wizard_back_callback(callback: CallbackQuery, state: FSMContext) -> No
     await callback.message.edit_reply_markup()  # type: ignore[union-attr]
 
     if current_state == ScheduleForm.waiting_for_interval.state:
-        await state.set_state(ScheduleForm.waiting_for_target)
+        targets: list[str] = list(data.get("targets") or [])
+        await state.set_state(ScheduleForm.waiting_for_more_targets)
+        targets_display = ", ".join(f"<code>{t}</code>" for t in targets)
         await callback.message.answer(  # type: ignore[union-attr]
-            "Step 1 — <b>Who should receive the messages?</b>\n\n"
-            "Choose one of:\n"
-            "• Type <code>@username</code> — user or public group/channel\n"
-            "• Type <code>-100XXXXXXXXXX</code> — group without a @username (numeric chat ID)\n"
-            "• <b>Forward any message</b> from the target group — the bot detects it automatically",
-            reply_markup=nav_keyboard(show_back=False),
+            f"<b>Target(s) so far:</b> {targets_display}\n\n"
+            "Add another recipient or continue to the next step?",
+            reply_markup=more_targets_keyboard(len(targets)),
             parse_mode="HTML",
         )
+
+    elif current_state == ScheduleForm.waiting_for_more_targets.state:
+        targets = list(data.get("targets") or [])
+        if len(targets) > 1:
+            targets.pop()
+            await state.update_data(targets=targets, target=targets[0])
+            targets_display = ", ".join(f"<code>{t}</code>" for t in targets)
+            await callback.message.answer(  # type: ignore[union-attr]
+                f"<b>Target(s) so far:</b> {targets_display}\n\n"
+                "Add another recipient or continue to the next step?",
+                reply_markup=more_targets_keyboard(len(targets)),
+                parse_mode="HTML",
+            )
+        else:
+            await state.update_data(targets=[], target=None)
+            await state.set_state(ScheduleForm.waiting_for_target)
+            await callback.message.answer(  # type: ignore[union-attr]
+                "Step 1 — <b>Who should receive the messages?</b>\n\n"
+                "• <code>@username</code> — user or public group/channel\n"
+                "• <code>-100XXXXXXXXXX</code> — numeric chat ID\n"
+                "• <b>Forward any message</b> from the target",
+                reply_markup=nav_keyboard(show_back=False),
+                parse_mode="HTML",
+            )
 
     elif current_state == ScheduleForm.waiting_for_timezone.state:
         await state.set_state(ScheduleForm.waiting_for_interval)

@@ -52,6 +52,7 @@ from ..users import (
 from .keyboards import (
     active_user_keyboard,
     blackout_keyboard,
+    cancel_only_keyboard,
     confirm_keyboard,
     edit_field_keyboard,
     edit_language_keyboard,
@@ -210,8 +211,9 @@ async def cmd_start(message: Message) -> None:
         "I generate AI messages and send them on a schedule.\n\n"
         "Commands:\n"
         "/schedule — create a new scheduled message\n"
-        "/list — view your active schedules\n"
+        "/list — view and manage your active schedules\n"
         "/cancel — cancel a schedule\n"
+        "/id — get this chat's numeric ID (useful for groups)\n"
         "/help — show this message",
         parse_mode="HTML",
     )
@@ -1530,8 +1532,30 @@ async def cmd_cancel(message: Message, state: FSMContext) -> None:
     if current_state and current_state.startswith("ScheduleForm:"):
         await state.clear()
         await message.answer("❌ Scheduling cancelled. Use /schedule to start again.")
-    else:
-        await message.answer("Use the 🗑 buttons in /list to cancel a specific schedule.")
+        return
+
+    uid = message.from_user.id
+    is_admin = await _is_admin(uid)
+    tasks = await list_all_active_tasks() if is_admin else await list_active_tasks(uid)
+
+    if not tasks:
+        await message.answer("No active schedules to cancel.")
+        return
+
+    await message.answer(
+        "Which schedule would you like to cancel?\n\nTap a button below:"
+    )
+    for task in tasks:
+        extra = json.loads(task.extra_targets) if task.extra_targets else []
+        all_tgts = [task.target_username] + extra
+        to_str = ", ".join(f"<code>{t}</code>" for t in all_tgts)
+        paused_badge = " ⏸" if task.is_paused else ""
+        await message.answer(
+            f"<b>#{task.id}</b>{paused_badge} → {to_str}\n"
+            f"<i>{task.interval_label}</i>",
+            reply_markup=cancel_only_keyboard(task.id),
+            parse_mode="HTML",
+        )
 
 
 @router.callback_query(F.data.startswith("cancel_task:"))

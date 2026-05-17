@@ -196,6 +196,12 @@ def edit_field_keyboard(
     return builder.as_markup()
 
 
+def cancel_only_keyboard(task_id: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🗑 Cancel this schedule", callback_data=f"cancel_task:{task_id}")
+    return builder.as_markup()
+
+
 def block_keyboard(telegram_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="🚫 Block", callback_data=f"block_user:{telegram_id}")

@@ -45,7 +45,7 @@ A Telegram bot that schedules and delivers messages automatically — either AI-
 | `/schedule` | Registered users | Open the schedule creation wizard |
 | `/list` | Registered users | View and manage active schedules (admin sees all) |
 | `/cancel` | Registered users | Cancel a schedule — shows an interactive list with cancel buttons |
-| `/id` | Everyone | Get the current chat's numeric ID (useful for scheduling to groups without a @username) |
+| `/id` | Everyone (in groups) | Get the group's numeric ID — only shown in group chats where the bot is a member |
 | `/users` | Master admin | List all users with schedules; block/unblock, grant/revoke admin |
 | `/help` | Everyone | Show help |
 

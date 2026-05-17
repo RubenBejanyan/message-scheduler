@@ -86,6 +86,7 @@ async def main() -> None:
         BotCommand(command="schedule", description="Create a new scheduled message"),
         BotCommand(command="list", description="View your active schedules"),
         BotCommand(command="cancel", description="Cancel a schedule"),
+        BotCommand(command="id", description="Get this chat's numeric ID (useful for groups)"),
         BotCommand(command="help", description="Help & all commands"),
     ])
     dp = Dispatcher(storage=RedisStorage.from_url(settings.redis_url))

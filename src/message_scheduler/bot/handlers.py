@@ -56,6 +56,7 @@ from .keyboards import (
     edit_language_keyboard,
     edit_timezone_keyboard,
     language_keyboard,
+    media_type_keyboard,
     message_mode_keyboard,
     nav_keyboard,
     randomization_keyboard,
@@ -717,12 +718,10 @@ async def process_mode(callback: CallbackQuery, state: FSMContext) -> None:
         step = "6"
 
     if mode == "exact":
-        await state.set_state(ScheduleForm.waiting_for_messages)
+        await state.set_state(ScheduleForm.waiting_for_media_type)
         await callback.message.answer(  # type: ignore[union-attr]
-            f"Step {step} — <b>Enter your message(s)</b>\n\n"
-            "Type one message — or multiple messages, one per line. "
-            "Each send will pick one at random.\n\n"
-            "<i>Maximum 20 messages, 4000 characters each.</i>",
+            f"Step {step} — <b>What type of content will you send?</b>",
+            reply_markup=media_type_keyboard(),
             parse_mode="HTML",
         )
     else:
@@ -733,6 +732,104 @@ async def process_mode(callback: CallbackQuery, state: FSMContext) -> None:
             parse_mode="HTML",
         )
     await callback.answer()
+
+
+_MEDIA_EMOJI: dict[str, str] = {
+    "photo": "🖼",
+    "voice": "🎤",
+    "document": "📄",
+    "video": "🎥",
+}
+
+
+@router.callback_query(F.data.startswith("media_type:"), ScheduleForm.waiting_for_media_type)
+async def process_media_type(callback: CallbackQuery, state: FSMContext) -> None:
+    chosen = callback.data.split(":")[1]  # type: ignore[union-attr]
+    await state.update_data(media_type=chosen)
+    await callback.message.edit_reply_markup()  # type: ignore[union-attr]
+
+    data = await state.get_data()
+    interval_type = data.get("interval_type", "interval")
+    if interval_type == "cron":
+        next_step = "8"
+    elif interval_type == "once":
+        next_step = "6"
+    else:
+        next_step = "7"
+
+    if chosen == "text":
+        await state.set_state(ScheduleForm.waiting_for_messages)
+        await callback.message.answer(  # type: ignore[union-attr]
+            f"Step {next_step} — <b>Enter your message(s)</b>\n\n"
+            "Type one message — or multiple messages, one per line. "
+            "Each send will pick one at random.\n\n"
+            "<i>Maximum 20 messages, 4000 characters each.</i>",
+            reply_markup=nav_keyboard(),
+            parse_mode="HTML",
+        )
+    else:
+        emoji = _MEDIA_EMOJI.get(chosen, "📎")
+        await state.set_state(ScheduleForm.waiting_for_media)
+        await callback.message.answer(  # type: ignore[union-attr]
+            f"Step {next_step} — <b>Send the {emoji} {chosen}</b>\n\n"
+            f"Upload the {chosen} you want to send on this schedule.",
+            reply_markup=nav_keyboard(),
+            parse_mode="HTML",
+        )
+    await callback.answer()
+
+
+@router.message(ScheduleForm.waiting_for_media)
+async def process_media_upload(message: Message, state: FSMContext) -> None:
+    if message.from_user is None or not await _is_approved(message.from_user.id):
+        return
+
+    data = await state.get_data()
+    expected = data.get("media_type", "")
+
+    file_id: str | None = None
+    if expected == "photo" and message.photo:
+        file_id = message.photo[-1].file_id
+    elif expected == "voice" and message.voice:
+        file_id = message.voice.file_id
+    elif expected == "document" and message.document:
+        file_id = message.document.file_id
+    elif expected == "video" and message.video:
+        file_id = message.video.file_id
+
+    if not file_id:
+        emoji = _MEDIA_EMOJI.get(expected, "📎")
+        await message.answer(
+            f"Please send a {emoji} {expected}.",
+            reply_markup=nav_keyboard(),
+        )
+        return
+
+    await state.update_data(media_file_id=file_id)
+    await state.set_state(ScheduleForm.waiting_for_confirm)
+
+    interval_type = data.get("interval_type", "interval")
+    jitter = data.get("jitter_seconds")
+    jitter_line = f"• Randomization: {_jitter_label(jitter)}\n" if jitter else ""
+    tz = data.get("timezone", "UTC")
+    tz_line = f"• Timezone: {tz}\n" if interval_type != "interval" else ""
+    schedule_key = "Send time" if interval_type == "once" else "Frequency"
+    repeat_count = data.get("repeat_count")
+    repeat_line = f"• Repeat: {repeat_count} times\n" if repeat_count else ""
+    emoji = _MEDIA_EMOJI.get(expected, "📎")
+
+    await message.answer(
+        "📋 <b>Confirm your schedule:</b>\n\n"
+        f"• Recipient: <code>{data['target']}</code>\n"
+        f"• {schedule_key}: {data['interval_label']}\n"
+        f"{tz_line}"
+        f"{jitter_line}"
+        f"{repeat_line}"
+        f"• Mode: ✍️ Exact — {emoji} {expected.capitalize()}\n\n"
+        f"Ready to activate?{_BOT_SEND_NOTICE}",
+        reply_markup=confirm_keyboard(),
+        parse_mode="HTML",
+    )
 
 
 @router.message(ScheduleForm.waiting_for_messages)
@@ -870,11 +967,18 @@ async def confirm_yes(callback: CallbackQuery, state: FSMContext) -> None:
         interval_label += f" ({_jitter_label(jitter)} randomization)"
 
     mode: str = data.get("message_mode", "ai")
+    media_type: str | None = data.get("media_type") if mode == "exact" else None
+    is_media = media_type and media_type != "text"
+    media_file_id: str | None = data.get("media_file_id") if is_media else None
     messages_json: str | None = None
-    if mode == "exact":
+    if mode == "exact" and (media_type is None or media_type == "text"):
         msgs: list[str] = data.get("messages", [])
         messages_json = json.dumps(msgs, ensure_ascii=False)
         topic = msgs[0][:100]
+        language = "—"
+    elif mode == "exact":
+        emoji = _MEDIA_EMOJI.get(media_type or "", "📎")
+        topic = f"{emoji} {(media_type or '').capitalize()} media"
         language = "—"
     else:
         topic = data["topic"]
@@ -894,8 +998,14 @@ async def confirm_yes(callback: CallbackQuery, state: FSMContext) -> None:
             messages_json=messages_json,
             timezone=data.get("timezone", "UTC"),
             repeat_count=repeat_count,
+            media_type=media_type if is_media else None,
+            media_file_id=media_file_id,
         )
-        mode_label = "✍️ exact" if mode == "exact" else f"🤖 AI · {task.language}"
+        if mode == "exact" and media_type and media_type != "text":
+            emoji = _MEDIA_EMOJI.get(media_type, "📎")
+            mode_label = f"✍️ exact — {emoji} {media_type}"
+        else:
+            mode_label = "✍️ exact" if mode == "exact" else f"🤖 AI · {task.language}"
         repeat_suffix = f" · up to {repeat_count}×" if repeat_count else ""
         await callback.message.answer(  # type: ignore[union-attr]
             f"✅ Schedule created! (ID: <code>{task.id}</code>)\n"
@@ -1027,6 +1137,34 @@ async def wizard_back_callback(callback: CallbackQuery, state: FSMContext) -> No
                 parse_mode="HTML",
             )
 
+    elif current_state == ScheduleForm.waiting_for_media_type.state:
+        if interval_type == "cron":
+            step = "6"
+        elif interval_type == "once":
+            step = "4"
+        else:
+            step = "5"
+        await state.set_state(ScheduleForm.waiting_for_mode)
+        await callback.message.answer(  # type: ignore[union-attr]
+            f"Step {step} — <b>What should I send?</b>",
+            reply_markup=message_mode_keyboard(),
+            parse_mode="HTML",
+        )
+
+    elif current_state == ScheduleForm.waiting_for_media.state:
+        if interval_type == "cron":
+            step = "7"
+        elif interval_type == "once":
+            step = "5"
+        else:
+            step = "6"
+        await state.set_state(ScheduleForm.waiting_for_media_type)
+        await callback.message.answer(  # type: ignore[union-attr]
+            f"Step {step} — <b>What type of content will you send?</b>",
+            reply_markup=media_type_keyboard(),
+            parse_mode="HTML",
+        )
+
     elif current_state == ScheduleForm.waiting_for_language.state:
         if interval_type == "cron":
             step = "6"
@@ -1057,26 +1195,42 @@ async def wizard_back_callback(callback: CallbackQuery, state: FSMContext) -> No
 
     elif current_state == ScheduleForm.waiting_for_messages.state:
         if interval_type == "cron":
-            step = "6"
+            step = "7"
         elif interval_type == "once":
-            step = "4"
-        else:
             step = "5"
-        await state.set_state(ScheduleForm.waiting_for_mode)
+        else:
+            step = "6"
+        await state.set_state(ScheduleForm.waiting_for_media_type)
         await callback.message.answer(  # type: ignore[union-attr]
-            f"Step {step} — <b>What should I send?</b>",
-            reply_markup=message_mode_keyboard(),
+            f"Step {step} — <b>What type of content will you send?</b>",
+            reply_markup=media_type_keyboard(),
             parse_mode="HTML",
         )
 
     elif current_state == ScheduleForm.waiting_for_confirm.state:
-        if message_mode == "exact":
+        media_type_val: str | None = data.get("media_type")
+        if message_mode == "exact" and media_type_val and media_type_val != "text":
             if interval_type == "cron":
-                step = "7"
+                step = "8"
             elif interval_type == "once":
-                step = "5"
-            else:
                 step = "6"
+            else:
+                step = "7"
+            emoji = _MEDIA_EMOJI.get(media_type_val, "📎")
+            await state.set_state(ScheduleForm.waiting_for_media)
+            await callback.message.answer(  # type: ignore[union-attr]
+                f"Step {step} — <b>Send the {emoji} {media_type_val}</b>\n\n"
+                f"Upload the {media_type_val} you want to send on this schedule.",
+                reply_markup=nav_keyboard(),
+                parse_mode="HTML",
+            )
+        elif message_mode == "exact":
+            if interval_type == "cron":
+                step = "8"
+            elif interval_type == "once":
+                step = "6"
+            else:
+                step = "7"
             await state.set_state(ScheduleForm.waiting_for_messages)
             await callback.message.answer(  # type: ignore[union-attr]
                 f"Step {step} — <b>Enter your message(s)</b>\n\n"

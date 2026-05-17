@@ -81,9 +81,25 @@ async def _notify_owner(uid: int, text: str) -> None:
 
 
 async def _build_message(task: ScheduledTask) -> str:
+    if task.media_type and task.media_file_id:
+        return f"[{task.media_type}:{task.media_file_id}]"
     if task.message_mode == "exact" and task.messages_json:
         return str(random.choice(json.loads(task.messages_json)))
     return await generate_message(task.target_username, task.topic, task.language)
+
+
+async def _send_content(bot: Bot, chat_id: int | str, task: ScheduledTask, text: str) -> None:
+    fid = task.media_file_id
+    if task.media_type == "photo" and fid:
+        await bot.send_photo(chat_id=chat_id, photo=fid)
+    elif task.media_type == "voice" and fid:
+        await bot.send_voice(chat_id=chat_id, voice=fid)
+    elif task.media_type == "document" and fid:
+        await bot.send_document(chat_id=chat_id, document=fid)
+    elif task.media_type == "video" and fid:
+        await bot.send_video(chat_id=chat_id, video=fid)
+    else:
+        await bot.send_message(chat_id=chat_id, text=text)
 
 
 async def _execute_job(task_id: int) -> None:
@@ -99,7 +115,7 @@ async def _execute_job(task_id: int) -> None:
         if _bot is None:
             raise RuntimeError("Bot instance not set — call set_bot() on startup")
         chat_id = await _resolve_target(task.target_username)
-        await _bot.send_message(chat_id=chat_id, text=text)
+        await _send_content(_bot, chat_id, task, text)
 
         prev_failures = task.consecutive_failures
         new_sent_count = task.sent_count + 1
@@ -209,7 +225,7 @@ async def fire_task_now(task_id: int) -> str:
     if _bot is None:
         raise RuntimeError("Bot instance not set — call set_bot() on startup")
     chat_id = await _resolve_target(task.target_username)
-    await _bot.send_message(chat_id=chat_id, text=text)
+    await _send_content(_bot, chat_id, task, text)
 
     async with async_session_factory() as session:
         await session.execute(
@@ -319,6 +335,8 @@ async def create_task(
     messages_json: str | None = None,
     timezone: str = "UTC",
     repeat_count: int | None = None,
+    media_type: str | None = None,
+    media_file_id: str | None = None,
 ) -> ScheduledTask:
     """Persist a new scheduled task and register it with APScheduler."""
     job_id = f"task_{uuid.uuid4().hex[:12]}"
@@ -336,6 +354,8 @@ async def create_task(
         messages_json=messages_json,
         timezone=timezone,
         repeat_count=repeat_count,
+        media_type=media_type,
+        media_file_id=media_file_id,
         job_id=job_id,
         is_active=True,
     )

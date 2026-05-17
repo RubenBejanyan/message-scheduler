@@ -8,6 +8,8 @@ class ScheduleForm(StatesGroup):
     waiting_for_randomization = State()
     waiting_for_repeat_count = State()
     waiting_for_mode = State()
+    waiting_for_media_type = State()
+    waiting_for_media = State()
     waiting_for_language = State()
     waiting_for_topic = State()
     waiting_for_messages = State()

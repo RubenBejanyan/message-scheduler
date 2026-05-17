@@ -147,6 +147,18 @@ def message_mode_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def media_type_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📝 Text", callback_data="media_type:text")
+    builder.button(text="🖼 Photo", callback_data="media_type:photo")
+    builder.button(text="🎤 Voice", callback_data="media_type:voice")
+    builder.button(text="📄 Document", callback_data="media_type:document")
+    builder.button(text="🎥 Video", callback_data="media_type:video")
+    builder.adjust(2)
+    _add_nav_row(builder)
+    return builder.as_markup()
+
+
 def edit_field_keyboard(
     task_id: int, message_mode: str = "ai", interval_type: str = "interval"
 ) -> InlineKeyboardMarkup:

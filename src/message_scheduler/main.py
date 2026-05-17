@@ -14,7 +14,11 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.redis import RedisStorage
-from aiogram.types import BotCommand
+from aiogram.types import (
+    BotCommand,
+    BotCommandScopeAllGroupChats,
+    BotCommandScopeAllPrivateChats,
+)
 
 from .bot.handlers import router
 from .config import settings
@@ -82,13 +86,19 @@ async def main() -> None:
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     set_bot(bot)
-    await bot.set_my_commands([
-        BotCommand(command="schedule", description="Create a new scheduled message"),
-        BotCommand(command="list", description="View your active schedules"),
-        BotCommand(command="cancel", description="Cancel a schedule"),
-        BotCommand(command="id", description="Get this chat's numeric ID (useful for groups)"),
-        BotCommand(command="help", description="Help & all commands"),
-    ])
+    await bot.set_my_commands(
+        [
+            BotCommand(command="schedule", description="Create a new scheduled message"),
+            BotCommand(command="list", description="View your active schedules"),
+            BotCommand(command="cancel", description="Cancel a schedule"),
+            BotCommand(command="help", description="Help & all commands"),
+        ],
+        scope=BotCommandScopeAllPrivateChats(),
+    )
+    await bot.set_my_commands(
+        [BotCommand(command="id", description="Get this group's numeric ID")],
+        scope=BotCommandScopeAllGroupChats(),
+    )
     dp = Dispatcher(storage=RedisStorage.from_url(settings.redis_url))
     dp.include_router(router)
 

@@ -67,6 +67,11 @@ class ScheduledTask(Base):
         String(50), nullable=False, default="UTC", server_default="UTC"
     )
 
+    # "photo" | "voice" | "document" | "video" | "animation" | None (text)
+    media_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Telegram file_id for the media to send; only set when media_type is not None.
+    media_file_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
     # Optional cap on total sends. None = unlimited.
     repeat_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Total number of successful sends so far.

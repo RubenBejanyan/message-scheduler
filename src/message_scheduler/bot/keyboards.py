@@ -77,6 +77,16 @@ def edit_timezone_keyboard(task_id: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def more_targets_keyboard(count: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="➕ Add another target", callback_data="more_targets_add")
+    label = f"✅ Continue ({count} target{'s' if count > 1 else ''})"
+    builder.button(text=label, callback_data="more_targets_done")
+    builder.adjust(1)
+    _add_nav_row(builder)
+    return builder.as_markup()
+
+
 def confirm_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Confirm", callback_data="confirm_yes")

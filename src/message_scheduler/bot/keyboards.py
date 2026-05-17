@@ -95,6 +95,15 @@ def confirm_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def blackout_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="⏭ Skip", callback_data="blackout:skip")
+    builder.button(text="🌙 Set quiet hours", callback_data="blackout:set")
+    builder.adjust(2)
+    _add_nav_row(builder)
+    return builder.as_markup()
+
+
 def task_keyboard(task_id: int, is_paused: bool) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="▶ Send now", callback_data=f"send_now:{task_id}")
@@ -105,8 +114,9 @@ def task_keyboard(task_id: int, is_paused: bool) -> InlineKeyboardMarkup:
         builder.button(text="⏸ Pause", callback_data=f"pause_task:{task_id}")
     builder.button(text="✏️ Edit", callback_data=f"edit_task:{task_id}")
     builder.button(text="📋 History", callback_data=f"history:{task_id}")
+    builder.button(text="📋 Clone", callback_data=f"clone_task:{task_id}")
     builder.button(text="🗑 Cancel this task", callback_data=f"cancel_task:{task_id}")
-    builder.adjust(2, 2, 1, 1)
+    builder.adjust(2, 2, 2, 1)
     return builder.as_markup()
 
 

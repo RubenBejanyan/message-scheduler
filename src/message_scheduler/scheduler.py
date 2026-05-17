@@ -1,8 +1,10 @@
 import json
 import logging
 import random
+import re
 import uuid
 from datetime import UTC, datetime
+from datetime import time as dtime
 from typing import cast
 from zoneinfo import ZoneInfo
 
@@ -102,6 +104,19 @@ async def _send_content(bot: Bot, chat_id: int | str, task: ScheduledTask, text:
         await bot.send_message(chat_id=chat_id, text=text)
 
 
+def _in_blackout(task: ScheduledTask) -> bool:
+    if not task.blackout_start or not task.blackout_end:
+        return False
+    tz = ZoneInfo(task.timezone or "UTC")
+    now = datetime.now(tz=tz).time().replace(second=0, microsecond=0)
+    sh, sm = map(int, task.blackout_start.split(":"))
+    eh, em = map(int, task.blackout_end.split(":"))
+    start, end = dtime(sh, sm), dtime(eh, em)
+    if start < end:
+        return start <= now < end
+    return now >= start or now < end  # overnight window
+
+
 async def _execute_job(task_id: int) -> None:
     """Called by APScheduler for each scheduled message."""
     async with async_session_factory() as session:
@@ -109,6 +124,9 @@ async def _execute_job(task_id: int) -> None:
         if task is None or not task.is_active or task.is_paused:
             return
     # task attributes remain accessible (expire_on_commit=False)
+    if _in_blackout(task):
+        logger.info("Job %s: skipped — in quiet-hours window", task.job_id)
+        return
 
     try:
         text = await _build_message(task)
@@ -351,6 +369,8 @@ async def create_task(
     media_type: str | None = None,
     media_file_id: str | None = None,
     extra_targets: str | None = None,
+    blackout_start: str | None = None,
+    blackout_end: str | None = None,
 ) -> ScheduledTask:
     """Persist a new scheduled task and register it with APScheduler."""
     job_id = f"task_{uuid.uuid4().hex[:12]}"
@@ -371,6 +391,8 @@ async def create_task(
         media_type=media_type,
         media_file_id=media_file_id,
         extra_targets=extra_targets,
+        blackout_start=blackout_start,
+        blackout_end=blackout_end,
         job_id=job_id,
         is_active=True,
     )
@@ -683,15 +705,34 @@ def parse_interval(text: str) -> tuple[str, str, str] | None:
     suffixes = {"m": 60, "h": 3600, "d": 86400}
     for suffix, multiplier in suffixes.items():
         if text.endswith(suffix):
+            body = text[:-1].strip()
             try:
-                amount = int(text[:-1])
+                amount = int(body)
             except ValueError:
-                return None
+                continue  # might be compound like "3d 6h"; try next suffix or compound below
             if amount <= 0:
                 return None
-            seconds = amount * multiplier
             unit_map = {"m": "minute(s)", "h": "hour(s)", "d": "day(s)"}
-            label = f"every {amount} {unit_map[suffix]}"
-            return ("interval", str(seconds), label)
+            return ("interval", str(amount * multiplier), f"every {amount} {unit_map[suffix]}")
+
+    # Compound intervals: "3d 6h", "2h 30m", "1d 12h 30m"
+    matches = re.findall(r"(\d+)\s*([dhm])", text)
+    if matches:
+        leftover = re.sub(r"\d+\s*[dhm]", "", text).strip()
+        if not leftover:
+            unit_secs = {"d": 86400, "h": 3600, "m": 60}
+            total = sum(int(n) * unit_secs[u] for n, u in matches)
+            if total > 0:
+                parts: list[str] = []
+                d, rem = divmod(total, 86400)
+                h, m = divmod(rem, 3600)
+                m //= 60
+                if d:
+                    parts.append(f"{d}d")
+                if h:
+                    parts.append(f"{h}h")
+                if m:
+                    parts.append(f"{m}m")
+                return ("interval", str(total), f"every {' '.join(parts)}")
 
     return None

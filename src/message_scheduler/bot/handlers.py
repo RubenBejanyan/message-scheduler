@@ -51,6 +51,7 @@ from ..users import (
 )
 from .keyboards import (
     active_user_keyboard,
+    blackout_keyboard,
     confirm_keyboard,
     edit_field_keyboard,
     edit_language_keyboard,
@@ -89,6 +90,45 @@ def _recipients_line(data: dict) -> str:  # type: ignore[type-arg]
     label = "Recipients" if len(targets) > 1 else "Recipient"
     joined = ", ".join(f"<code>{t}</code>" for t in targets)
     return f"• {label}: {joined}\n"
+
+
+def _build_confirm_text(data: dict) -> str:  # type: ignore[type-arg]
+    interval_type = data.get("interval_type", "interval")
+    jitter = data.get("jitter_seconds")
+    jitter_line = f"• Randomization: {_jitter_label(jitter)}\n" if jitter else ""
+    tz = data.get("timezone", "UTC")
+    tz_line = f"• Timezone: {tz}\n" if interval_type != "interval" else ""
+    schedule_key = "Send time" if interval_type == "once" else "Frequency"
+    repeat_count = data.get("repeat_count")
+    repeat_line = f"• Repeat: {repeat_count} times\n" if repeat_count else ""
+    bs, be = data.get("blackout_start"), data.get("blackout_end")
+    blackout_line = f"• Quiet hours: {bs}–{be}\n" if bs and be else ""
+    mode = data.get("message_mode", "ai")
+    media_type: str | None = data.get("media_type")
+    if mode == "exact" and media_type and media_type != "text":
+        emoji = _MEDIA_EMOJI.get(media_type, "📎")
+        content = f"• Mode: ✍️ Exact — {emoji} {media_type.capitalize()}\n"
+    elif mode == "exact":
+        msgs: list[str] = data.get("messages") or []
+        preview = (msgs[0][:120] + ("…" if len(msgs[0]) > 120 else "")) if msgs else ""
+        count_sfx = f" ({len(msgs)} messages, random pick)" if len(msgs) > 1 else ""
+        content = f"• Mode: ✍️ Exact message{count_sfx}\n• Preview: <i>{preview}</i>\n"
+    else:
+        content = (
+            f"• Language: {data.get('language', 'English')}\n"
+            f"• Topic: <i>{data.get('topic', '')}</i>\n"
+        )
+    return (
+        "📋 <b>Confirm your schedule:</b>\n\n"
+        f"{_recipients_line(data)}"
+        f"• {schedule_key}: {data.get('interval_label', '')}\n"
+        f"{tz_line}"
+        f"{jitter_line}"
+        f"{repeat_line}"
+        f"{blackout_line}"
+        f"{content}\n"
+        f"Ready to activate?{_BOT_SEND_NOTICE}"
+    )
 
 
 _BOT_SEND_NOTICE = (
@@ -698,14 +738,13 @@ async def process_repeat_count(callback: CallbackQuery, state: FSMContext) -> No
     raw = int(callback.data.split(":")[1])  # type: ignore[union-attr]
     repeat_count: int | None = raw if raw > 0 else None
     await state.update_data(repeat_count=repeat_count)
-    data = await state.get_data()
-    interval_type = data.get("interval_type", "interval")
-    step = "6" if interval_type == "cron" else "5"
     await callback.message.edit_reply_markup()  # type: ignore[union-attr]
-    await state.set_state(ScheduleForm.waiting_for_mode)
+    await state.set_state(ScheduleForm.waiting_for_blackout)
     await callback.message.answer(  # type: ignore[union-attr]
-        f"Step {step} — <b>What should I send?</b>",
-        reply_markup=message_mode_keyboard(),
+        "🌙 <b>Quiet hours</b> (optional)\n\n"
+        "Set a daily window during which messages will <b>not</b> be sent "
+        "(e.g. overnight or working hours). Skip if not needed.",
+        reply_markup=blackout_keyboard(),
         parse_mode="HTML",
     )
     await callback.answer()
@@ -732,15 +771,123 @@ async def process_repeat_count_text(message: Message, state: FSMContext) -> None
             )
             return
     await state.update_data(repeat_count=repeat_count)
-    data = await state.get_data()
+    await state.set_state(ScheduleForm.waiting_for_blackout)
+    await message.answer(
+        "🌙 <b>Quiet hours</b> (optional)\n\n"
+        "Set a daily window during which messages will <b>not</b> be sent "
+        "(e.g. overnight or working hours). Skip if not needed.",
+        reply_markup=blackout_keyboard(),
+        parse_mode="HTML",
+    )
+
+
+def _blackout_to_mode_prompt(data: dict) -> tuple[str, str]:  # type: ignore[type-arg]
     interval_type = data.get("interval_type", "interval")
-    step = "6" if interval_type == "cron" else "5"
+    step = "7" if interval_type == "cron" else "6"
+    return step, f"Step {step} — <b>What should I send?</b>"
+
+
+@router.callback_query(F.data.startswith("blackout:"), ScheduleForm.waiting_for_blackout)
+async def process_blackout(callback: CallbackQuery, state: FSMContext) -> None:
+    action = callback.data.split(":")[1]  # type: ignore[union-attr]
+    await callback.message.edit_reply_markup()  # type: ignore[union-attr]
+    if action == "skip":
+        data = await state.get_data()
+        _, prompt = _blackout_to_mode_prompt(data)
+        await state.set_state(ScheduleForm.waiting_for_mode)
+        await callback.message.answer(  # type: ignore[union-attr]
+            prompt, reply_markup=message_mode_keyboard(), parse_mode="HTML"
+        )
+    else:
+        await state.set_state(ScheduleForm.waiting_for_blackout_input)
+        await callback.message.answer(  # type: ignore[union-attr]
+            "Enter the quiet-hours window as <code>HH:MM-HH:MM</code>\n\n"
+            "Examples: <code>23:00-08:00</code> (overnight), "
+            "<code>09:00-18:00</code> (working hours)",
+            reply_markup=nav_keyboard(),
+            parse_mode="HTML",
+        )
+    await callback.answer()
+
+
+@router.message(ScheduleForm.waiting_for_blackout_input)
+async def process_blackout_input(message: Message, state: FSMContext) -> None:
+    if message.from_user is None or not await _is_approved(message.from_user.id):
+        return
+    raw = (message.text or "").strip()
+    try:
+        start_s, end_s = raw.split("-")
+        sh, sm = map(int, start_s.strip().split(":"))
+        eh, em = map(int, end_s.strip().split(":"))
+        if not (0 <= sh <= 23 and 0 <= sm <= 59 and 0 <= eh <= 23 and 0 <= em <= 59):
+            raise ValueError
+        if sh == eh and sm == em:
+            raise ValueError
+    except ValueError:
+        await message.answer(
+            "Invalid format. Use <code>HH:MM-HH:MM</code>, e.g. <code>23:00-08:00</code>.",
+            reply_markup=nav_keyboard(),
+            parse_mode="HTML",
+        )
+        return
+    bs = f"{sh:02d}:{sm:02d}"
+    be = f"{eh:02d}:{em:02d}"
+    await state.update_data(blackout_start=bs, blackout_end=be)
+    data = await state.get_data()
+    _, prompt = _blackout_to_mode_prompt(data)
     await state.set_state(ScheduleForm.waiting_for_mode)
     await message.answer(
-        f"Step {step} — <b>What should I send?</b>",
+        f"🌙 Quiet hours set: <b>{bs}–{be}</b>\n\n{prompt}",
         reply_markup=message_mode_keyboard(),
         parse_mode="HTML",
     )
+
+
+@router.callback_query(F.data.startswith("clone_task:"))
+async def clone_task_callback(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    if callback.from_user is None:
+        return
+    task_id = int(callback.data.split(":")[1])  # type: ignore[union-attr]
+    task = await get_task(task_id)
+    if task is None or not task.is_active:
+        await callback.answer("Task not found or inactive.", show_alert=True)
+        return
+    uid = callback.from_user.id
+    if task.user_telegram_id != uid and not await _is_admin(uid):
+        await callback.answer("Not your task.", show_alert=True)
+        return
+
+    targets = [task.target_username]
+    if task.extra_targets:
+        targets += json.loads(task.extra_targets)
+    msgs: list[str] = json.loads(task.messages_json) if task.messages_json else []
+
+    clone_data: dict[str, object] = {
+        "targets": targets,
+        "target": targets[0],
+        "interval_type": task.interval_type,
+        "interval_value": task.interval_value,
+        "interval_label": task.interval_label,
+        "jitter_seconds": task.jitter_seconds,
+        "timezone": task.timezone or "UTC",
+        "repeat_count": task.repeat_count,
+        "blackout_start": task.blackout_start,
+        "blackout_end": task.blackout_end,
+        "message_mode": task.message_mode,
+        "messages": msgs,
+        "topic": task.topic,
+        "language": task.language,
+        "media_type": task.media_type,
+        "media_file_id": task.media_file_id,
+    }
+    await state.set_state(ScheduleForm.waiting_for_confirm)
+    await state.set_data(clone_data)
+    await callback.message.answer(  # type: ignore[union-attr]
+        f"📋 <b>Cloning schedule #{task_id}</b>\n\n" + _build_confirm_text(clone_data),
+        reply_markup=confirm_keyboard(),
+        parse_mode="HTML",
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("mode:"), ScheduleForm.waiting_for_mode)
@@ -846,30 +993,11 @@ async def process_media_upload(message: Message, state: FSMContext) -> None:
         )
         return
 
+    data["media_file_id"] = file_id
     await state.update_data(media_file_id=file_id)
     await state.set_state(ScheduleForm.waiting_for_confirm)
-
-    interval_type = data.get("interval_type", "interval")
-    jitter = data.get("jitter_seconds")
-    jitter_line = f"• Randomization: {_jitter_label(jitter)}\n" if jitter else ""
-    tz = data.get("timezone", "UTC")
-    tz_line = f"• Timezone: {tz}\n" if interval_type != "interval" else ""
-    schedule_key = "Send time" if interval_type == "once" else "Frequency"
-    repeat_count = data.get("repeat_count")
-    repeat_line = f"• Repeat: {repeat_count} times\n" if repeat_count else ""
-    emoji = _MEDIA_EMOJI.get(expected, "📎")
-
     await message.answer(
-        "📋 <b>Confirm your schedule:</b>\n\n"
-        f"{_recipients_line(data)}"
-        f"• {schedule_key}: {data['interval_label']}\n"
-        f"{tz_line}"
-        f"{jitter_line}"
-        f"{repeat_line}"
-        f"• Mode: ✍️ Exact — {emoji} {expected.capitalize()}\n\n"
-        f"Ready to activate?{_BOT_SEND_NOTICE}",
-        reply_markup=confirm_keyboard(),
-        parse_mode="HTML",
+        _build_confirm_text(data), reply_markup=confirm_keyboard(), parse_mode="HTML"
     )
 
 
@@ -892,30 +1020,8 @@ async def process_messages(message: Message, state: FSMContext) -> None:
     await state.update_data(messages=msgs)
     data = await state.get_data()
     await state.set_state(ScheduleForm.waiting_for_confirm)
-
-    interval_type = data.get("interval_type", "interval")
-    jitter = data.get("jitter_seconds")
-    jitter_line = f"• Randomization: {_jitter_label(jitter)}\n" if jitter else ""
-    tz = data.get("timezone", "UTC")
-    tz_line = f"• Timezone: {tz}\n" if interval_type != "interval" else ""
-    schedule_key = "Send time" if interval_type == "once" else "Frequency"
-    repeat_count = data.get("repeat_count")
-    repeat_line = f"• Repeat: {repeat_count} times\n" if repeat_count else ""
-    preview = msgs[0][:120] + ("…" if len(msgs[0]) > 120 else "")
-    count_line = f" ({len(msgs)} messages, random pick)" if len(msgs) > 1 else ""
-
     await message.answer(
-        "📋 <b>Confirm your schedule:</b>\n\n"
-        f"{_recipients_line(data)}"
-        f"• {schedule_key}: {data['interval_label']}\n"
-        f"{tz_line}"
-        f"{jitter_line}"
-        f"{repeat_line}"
-        f"• Mode: ✍️ Exact message{count_line}\n"
-        f"• Preview: <i>{preview}</i>\n\n"
-        f"Ready to activate?{_BOT_SEND_NOTICE}",
-        reply_markup=confirm_keyboard(),
-        parse_mode="HTML",
+        _build_confirm_text(data), reply_markup=confirm_keyboard(), parse_mode="HTML"
     )
 
 
@@ -956,28 +1062,8 @@ async def process_topic(message: Message, state: FSMContext) -> None:
     await state.update_data(topic=topic)
     data = await state.get_data()
     await state.set_state(ScheduleForm.waiting_for_confirm)
-
-    interval_type = data.get("interval_type", "interval")
-    jitter = data.get("jitter_seconds")
-    jitter_line = f"• Randomization: {_jitter_label(jitter)}\n" if jitter else ""
-    tz = data.get("timezone", "UTC")
-    tz_line = f"• Timezone: {tz}\n" if interval_type != "interval" else ""
-    schedule_key = "Send time" if interval_type == "once" else "Frequency"
-    repeat_count = data.get("repeat_count")
-    repeat_line = f"• Repeat: {repeat_count} times\n" if repeat_count else ""
-
     await message.answer(
-        "📋 <b>Confirm your schedule:</b>\n\n"
-        f"{_recipients_line(data)}"
-        f"• {schedule_key}: {data['interval_label']}\n"
-        f"{tz_line}"
-        f"{jitter_line}"
-        f"{repeat_line}"
-        f"• Language: {data.get('language', 'English')}\n"
-        f"• Topic: <i>{topic}</i>\n\n"
-        f"Ready to activate?{_BOT_SEND_NOTICE}",
-        reply_markup=confirm_keyboard(),
-        parse_mode="HTML",
+        _build_confirm_text(data), reply_markup=confirm_keyboard(), parse_mode="HTML"
     )
 
 
@@ -1046,6 +1132,8 @@ async def confirm_yes(callback: CallbackQuery, state: FSMContext) -> None:
             media_type=media_type if is_media else None,
             media_file_id=media_file_id,
             extra_targets=extra_targets_json,
+            blackout_start=data.get("blackout_start"),
+            blackout_end=data.get("blackout_end"),
         )
         if mode == "exact" and media_type and media_type != "text":
             emoji = _MEDIA_EMOJI.get(media_type, "📎")
@@ -1089,6 +1177,8 @@ _INTERVAL_PROMPT = (
     "• <code>30m</code> — every 30 minutes\n"
     "• <code>2h</code> — every 2 hours\n"
     "• <code>1d</code> — every day\n"
+    "• <code>1d 6h</code> — every 1 day and 6 hours\n"
+    "• <code>2h 30m</code> — every 2 hours and 30 minutes\n"
     "• <code>daily 09:00</code> — every day at 09:00 UTC\n"
     "• <code>window 15:15-15:50</code> — daily at a random time in that range\n"
     "• <code>once 2026-05-20 14:30</code> — send once on that date and time"
@@ -1187,6 +1277,28 @@ async def wizard_back_callback(callback: CallbackQuery, state: FSMContext) -> No
                 parse_mode="HTML",
             )
 
+    elif current_state == ScheduleForm.waiting_for_blackout.state:
+        step = "5" if interval_type == "cron" else "4"
+        await state.set_state(ScheduleForm.waiting_for_repeat_count)
+        await callback.message.answer(  # type: ignore[union-attr]
+            f"Step {step} — <b>How many times?</b>\n\n"
+            "Choose how many times this message should be sent, "
+            "or pick <b>Unlimited</b> for no cap.\n\n"
+            "You can also type a custom number (e.g. <code>15</code>):",
+            reply_markup=repeat_count_keyboard(),
+            parse_mode="HTML",
+        )
+
+    elif current_state == ScheduleForm.waiting_for_blackout_input.state:
+        await state.set_state(ScheduleForm.waiting_for_blackout)
+        await callback.message.answer(  # type: ignore[union-attr]
+            "🌙 <b>Quiet hours</b> (optional)\n\n"
+            "Set a daily window during which messages will <b>not</b> be sent. "
+            "Skip if not needed.",
+            reply_markup=blackout_keyboard(),
+            parse_mode="HTML",
+        )
+
     elif current_state == ScheduleForm.waiting_for_mode.state:
         if interval_type == "once":
             await state.set_state(ScheduleForm.waiting_for_timezone)
@@ -1196,14 +1308,12 @@ async def wizard_back_callback(callback: CallbackQuery, state: FSMContext) -> No
                 parse_mode="HTML",
             )
         else:
-            step = "5" if interval_type == "cron" else "4"
-            await state.set_state(ScheduleForm.waiting_for_repeat_count)
+            await state.set_state(ScheduleForm.waiting_for_blackout)
             await callback.message.answer(  # type: ignore[union-attr]
-                f"Step {step} — <b>How many times?</b>\n\n"
-                "Choose how many times this message should be sent, "
-                "or pick <b>Unlimited</b> for no cap.\n\n"
-                "You can also type a custom number (e.g. <code>15</code>):",
-                reply_markup=repeat_count_keyboard(),
+                "🌙 <b>Quiet hours</b> (optional)\n\n"
+                "Set a daily window during which messages will <b>not</b> be sent. "
+                "Skip if not needed.",
+                reply_markup=blackout_keyboard(),
                 parse_mode="HTML",
             )
 
@@ -1374,6 +1484,14 @@ async def cmd_list(message: Message) -> None:
             if task.repeat_count
             else ""
         )
+        extra = json.loads(task.extra_targets) if task.extra_targets else []
+        all_tgts = [task.target_username] + extra
+        to_line = ", ".join(f"<code>{t}</code>" for t in all_tgts)
+        blackout_line = (
+            f"• Quiet hours: {task.blackout_start}–{task.blackout_end}\n"
+            if task.blackout_start and task.blackout_end
+            else ""
+        )
         if task.message_mode == "exact":
             mode_line = "• Mode: ✍️ Exact message\n"
             content_line = f"• Preview: <i>{task.topic[:80]}</i>\n"
@@ -1383,9 +1501,10 @@ async def cmd_list(message: Message) -> None:
         text = (
             f"{header} <b>Schedule #{task.id}</b>{paused_suffix}\n"
             f"{owner_line}"
-            f"• To: <code>{task.target_username}</code>\n"
+            f"• To: {to_line}\n"
             f"• Frequency: {task.interval_label}\n"
             f"{tz_line}"
+            f"{blackout_line}"
             f"{progress_line}"
             f"{mode_line}"
             f"{content_line}"
